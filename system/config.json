@@ -1,0 +1,9 @@
+{
+  "tick_rate": 1,
+  "max_npcs_per_tick": 10,
+  "max_events_per_tick": 50,
+  "memory_recent_limit": 100,
+  "random_seed": 42,
+  "enable_rumors": true,
+  "enable_faction_wars": true
+}

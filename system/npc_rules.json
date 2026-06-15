@@ -1,0 +1,21 @@
+{
+  "traits": {
+    "min": 0,
+    "max": 100
+  },
+  "trait_weights": {
+    "greed": 1.2,
+    "ambition": 1.1,
+    "fear": 1.0,
+    "kindness": 1.0,
+    "loyalty": 0.9,
+    "aggression": 1.1
+  },
+  "behavior_drivers": [
+    "survival",
+    "wealth",
+    "power",
+    "social_status",
+    "curiosity"
+  ]
+}
