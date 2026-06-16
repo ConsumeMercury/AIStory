@@ -4,6 +4,8 @@ Long-horizon narrative continuity — voice anchors, established details, no re-
 
 import re
 
+from simulation.beat_structure import beats_with_same_focus
+
 _QUOTED = re.compile(r'"([^"]{12,240})"')
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
 _DESCRIPTOR_WORDS = re.compile(
@@ -119,18 +121,29 @@ def build_no_reestablishment_note(player, journal, focal_npc_id, known_ids, area
         return ""
     lines = []
     visits = (player.get("discovered_areas") or {}).get(area_id, {}).get("visits", 0)
-    if area_id and (visits > 1 or len(journal) >= 3):
+    same_area_beats = sum(1 for e in journal[-8:] if e.get("area") == area_id) if area_id else 0
+    same_focus_beats = beats_with_same_focus(journal, area_id, focal_npc_id) if focal_npc_id else 0
+
+    if area_id and (visits > 1 or same_area_beats >= 2):
+        ban = "HARD BAN —" if same_area_beats >= 3 else "Do NOT"
         lines.append(
-            "ESTABLISHED PLACE: the protagonist already knows this location — "
-            "do NOT write a second arrival paragraph (no fresh weather/atmosphere opener). "
-            "Continue from the last moment."
+            f"ESTABLISHED PLACE ({same_area_beats + 1} beats in this exact spot): {ban} "
+            "re-describe setting, weather, heat, stall layout, or district atmosphere. "
+            "The player has NOT left — continue from the last moment; open on motion or change."
         )
     if focal_npc_id and focal_npc_id in (known_ids or set()):
-        lines.append(
-            "ESTABLISHED PERSON: they are already known — "
-            "do NOT re-describe face, hair, eyes, or voice register from scratch. "
-            "At most one small gesture; build on prior beats."
-        )
+        if same_focus_beats >= 2:
+            lines.append(
+                f"ESTABLISHED PERSON ({same_focus_beats + 1} exchanges with them here): "
+                "do NOT re-describe face, hair, eyes, robes, or voice register. "
+                "One small gesture at most; match VOICE ANCHOR and prior lines."
+            )
+        else:
+            lines.append(
+                "ESTABLISHED PERSON: they are already known — "
+                "do NOT re-describe face, hair, eyes, or voice from scratch. "
+                "At most one small gesture; build on prior beats."
+            )
     if not lines:
         return ""
     return "CONTINUITY — NO RE-ESTABLISHMENT:\n" + "\n".join(f"- {ln}" for ln in lines)

@@ -28,6 +28,7 @@ from simulation.novel_craft import (
     temperature_for_kind, frequency_penalty_for_kind,
 )
 from simulation.narrative_continuity import build_narrative_continuity_block
+from simulation.beat_structure import build_beat_structure_block, build_narrative_thread_directive
 from simulation.local_places import build_known_places_block, build_place_lock
 from simulation.generation_guardrails import guardrails_prompt_block, build_hard_constraints_block
 from simulation.gemini_client import generate_text, generate_text_stream
@@ -297,6 +298,16 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
         known_ids=known_ids, area_id=aid, action_kind=kind,
         action_context=action_context,
     )
+    thread_block = build_narrative_thread_directive(
+        player, npcs_all,
+        focal_npc_id=focal_npc_id,
+        present_ids=present_ids,
+        kind=kind,
+        action_context=action_context,
+    )
+    structure_block = build_beat_structure_block(
+        kind, action_context, player, journal, aid, focal_npc_id,
+    )
     mode_block = scene_mode_rules(kind, has_journal)
     length_block = scene_length_hint(kind, opening=not has_journal and kind == "explore")
 
@@ -351,6 +362,8 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
 
     prompt = _join_prompt_sections(
         CRAFT_CORE,
+        thread_block,
+        structure_block,
         craft_kind,
         length_block,
         mode_block,
@@ -374,7 +387,7 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
         immersion,
         hard_block,
         "Write the scene now. Literary novel prose only — obey HARD CONSTRAINTS, "
-        "CRAFT, SCENE MODE, and DO NOT REPEAT.",
+        "NARRATIVE THREAD, PROSE STRUCTURE, SCENE MODE, and DO NOT REPEAT.",
     )
     return prompt, token_budget, focal_npc_id, memory_debug
 

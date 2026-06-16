@@ -88,5 +88,7 @@ def test_narrative_block_includes_no_reestablishment():
         known_ids={"f1"}, area_id="ashmoor:market", action_kind="talk",
     )
     assert "NO RE-ESTABLISHMENT" in block
+    assert "ESTABLISHED PLACE" in block
+    assert "HARD BAN" in block
     assert "VOICE ANCHOR" in block
     assert "ESTABLISHED PERSON" in block

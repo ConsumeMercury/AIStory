@@ -1,5 +1,7 @@
 # Ordered markers that must appear in talk-scene prompts (assembly regression guard).
 VOICE:
+NARRATIVE THREAD
+PROSE STRUCTURE
 PROTAGONIST:
 THIS BEAT: The protagonist does NOT speak this beat unless they are only observing or moving.
 FOCAL PERSON — Father Hale

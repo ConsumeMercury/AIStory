@@ -21,7 +21,8 @@ FORBIDDEN:
 - Meta commands echoed as prose ("Walk around", "Ask what her name is").
 - Emotion labels as narration ("you feel nervous", "he seems aggressive").
 - Stacked metaphors (three similes in one sentence).
-- Opening every scene with weather unless this is the first beat in a place.
+- Opening every scene with weather or heat — especially consecutive beats in the same place.
+- Re-describing a place or person the player already saw this session (see PROSE STRUCTURE and NO RE-ESTABLISHMENT).
 - Inventing new named characters when a focal person is specified — or when NO FOCAL CHARACTER is set.
 - Changing an NPC's gender or pronouns from the FOCAL PERSON block (use ONLY the pronouns given).
 - Putting words in the protagonist's mouth unless THIS BEAT includes their exact quoted line.
@@ -52,11 +53,13 @@ FORM:
 CRAFT_BY_KIND = {
     "explore": (
         "BEAT TYPE — ARRIVAL / MOVEMENT:\n"
-        "Place in two senses — sight and one other. The protagonist observes only; they do NOT speak "
-        "unless given exact words. At most one stranger worth approaching; end before a conversation starts."
+        "First visit: one paragraph of place. Return visit: PROSE STRUCTURE — CONTINUATION applies — "
+        "new angle only, no second weather opener.\n"
+        "The protagonist observes only; they do NOT speak unless given exact words."
     ),
     "talk": (
         "BEAT TYPE — CONVERSATION:\n"
+        "Open on dialogue or reaction — not weather or stall description.\n"
         "Mid-exchange. At least half the scene is quoted dialogue. "
         "One thought in narration between lines. End on the other person's last line."
     ),
@@ -99,7 +102,8 @@ CRAFT_BY_KIND = {
     ),
     "search": (
         "BEAT TYPE — SEARCH / TAKE:\n"
-        "Hands on objects. If SCENE FACTS list an acquired item, describe ONLY that item.\n"
+        "Open on hands finding the object — the revelation comes first.\n"
+        "If SCENE FACTS list an acquired item, describe ONLY that item.\n"
         "If SCENE FACTS name a prior opponent, they keep the same role and gender — ambient guards "
         "may exist in the background but must not replace the focal person.\n"
         "Do not invent a different weapon or omit what was actually taken."
@@ -116,6 +120,7 @@ CRAFT_BY_KIND = {
     ),
     "investigate": (
         "BEAT TYPE — INVESTIGATION:\n"
+        "Open on the clue, contradiction, or detail examined — not the room's weather.\n"
         "Compare details, contradictions, physical evidence. "
         "If NO FOCAL CHARACTER: environment only — no invented priests, clerks, or witnesses with dialogue."
     ),

@@ -53,6 +53,8 @@ def test_generate_scene_uses_explicit_focal_id(monkeypatch):
     assert "FOCAL PERSON THIS BEAT: id=p1" in captured["prompt"]
     assert "LOCATION LOCK: Temple Row — the heavy door" in captured["prompt"]
     assert "HARD CONSTRAINTS" in captured["prompt"]
+    assert "NARRATIVE THREAD" in captured["prompt"]
+    assert "PROSE STRUCTURE" in captured["prompt"]
     assert captured["prompt"].strip().endswith("DO NOT REPEAT.")
 
 
