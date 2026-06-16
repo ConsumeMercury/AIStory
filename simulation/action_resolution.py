@@ -26,6 +26,14 @@ _ITEM_KEYWORDS = (
     (re.compile(r"\b(weapon|blade|steel)\b", re.I), "weapon", "sword", "notched blade"),
 )
 
+_NON_LOOT_REFERENTS = re.compile(
+    r"\b(bodies|body|corpse|corpses|remains|cadaver|dead|person|people|"
+    r"priest|priestess|cleric|monk|child|friend|enemy|victim|"
+    r"man|woman|girl|boy|hunter|guard|soldier|merchant|herbalist)\b",
+    re.I,
+)
+_PICKUP_VERBS = re.compile(r"\b(pick up|pickup|take|grab|loot|carry)\b", re.I)
+
 _FIND_PERSON = re.compile(
     r"\bfind(?:\s+(?:the|a|an))?\s+(.+)$", re.I,
 )
@@ -238,6 +246,40 @@ def pick_explore_hook(present, player):
     return present[0]
 
 
+def validate_acquire_item(action, player, area):
+    """
+    Refuse loot fabrication when the referent is not a valid takeable item.
+    Returns (ok, refusal_message).
+    """
+    if not _ACQUIRE_VERBS.search(action or ""):
+        return True, ""
+    if re.search(r"\b(find someone|find work|find a person)\b", action, re.I):
+        return True, ""
+    if _FIND_PERSON_QUERY.search(action or ""):
+        return True, ""
+
+    names_item = any(p.search(action or "") for p, _, _, _ in _ITEM_KEYWORDS)
+    if _NON_LOOT_REFERENTS.search(action or "") and not names_item:
+        return False, (
+            "ACQUIRE REFUSED — there is nothing like that here to take. "
+            "Do NOT invent a substitute item or add anything to inventory."
+        )
+
+    if _PICKUP_VERBS.search(action or "") and not names_item:
+        return False, (
+            "ACQUIRE REFUSED — nothing here to pick up. "
+            "Do NOT add items to inventory this beat."
+        )
+
+    if re.search(r"\b(search|look for|find)\b", action or "", re.I) and not names_item:
+        return False, (
+            "SEARCH REFUSED — nothing tangible to find here. "
+            "Do NOT invent loot."
+        )
+
+    return True, ""
+
+
 def try_acquire_item(action, player, area, tick, skill_success=True):
     """
     If action searches for or takes an item, add it to inventory before narration.
@@ -256,10 +298,7 @@ def try_acquire_item(action, player, area, tick, skill_success=True):
             matched = (category, item_type, template)
             break
     if not matched:
-        if re.search(r"\b(find|search|look for|take|grab|pick up)\b", action, re.I):
-            matched = ("weapon", "sword", "notched blade")
-        else:
-            return None, None
+        return None, None
 
     category, item_type, template = matched
     source = "wilderness"

@@ -1,17 +1,115 @@
 """
 Player trade and gift mechanics — coin and items actually move.
+All mutations require validate-or-refuse checks first (see validate_trade / validate_give).
 """
 
+import re
 import random
 
 from simulation.event_logger import log_event
 
+VENDOR_ROLES = frozenset({"merchant", "innkeeper", "trader", "blacksmith", "sailor"})
 
-def _pick_npc_item(npc):
+_ITEM_KEYWORDS = (
+    (re.compile(r"\b(sword|blade|cutlass|sabre|saber)\b", re.I), "weapon", "sword"),
+    (re.compile(r"\b(dagger|knife|stiletto)\b", re.I), "weapon", "dagger"),
+    (re.compile(r"\b(axe|hatchet)\b", re.I), "weapon", "axe"),
+    (re.compile(r"\b(bow|arrow)\b", re.I), "weapon", "bow"),
+    (re.compile(r"\b(armor|armour|coat|vest|jack)\b", re.I), "armor", "armor"),
+    (re.compile(r"\b(weapon|blade|steel)\b", re.I), "weapon", "sword"),
+)
+
+_GIVE_AMOUNT = re.compile(r"\b(\d+)\s*(?:coin|coins|silver|copper|gold)?\b", re.I)
+_BUY_VERBS = re.compile(r"\b(buy|purchase|trade for|barter for)\b", re.I)
+
+
+def _npc_is_vendor(npc):
+    if not npc:
+        return False
+    role = (npc.get("role") or "").lower()
+    occ = (npc.get("occupation") or "").lower()
+    if role in VENDOR_ROLES:
+        return True
+    return any(k in occ for k in ("merchant", "trader", "vendor", "shop", "stall"))
+
+
+def _find_sale_item(npc, action):
+    """Return inventory item matching a named purchase, or None."""
     inv = npc.get("inventory") or []
-    if not inv:
+    if not inv or not action:
         return None
-    return random.choice(inv)
+    for pattern, category, item_type in _ITEM_KEYWORDS:
+        if not pattern.search(action):
+            continue
+        for item in inv:
+            if not isinstance(item, dict):
+                continue
+            name = (item.get("name") or "").lower()
+            cat = (item.get("category") or "").lower()
+            itype = (item.get("type") or item.get("item_type") or "").lower()
+            if item_type in name or item_type in itype or cat == category:
+                return item
+        return None
+    return None
+
+
+def _action_names_item(action):
+    return any(p.search(action or "") for p, _, _ in _ITEM_KEYWORDS)
+
+
+def validate_trade(action, npc):
+    """
+    Refuse before any wealth mutation.
+    Returns (ok, refusal_message, sale_item_or_none).
+    """
+    if not npc:
+        return False, "There is no one here to trade with.", None
+
+    if not _npc_is_vendor(npc):
+        label = npc.get("name") or npc.get("role") or "They"
+        return False, f"{label} has nothing to sell.", None
+
+    inv = npc.get("inventory") or []
+    names_item = _action_names_item(action)
+
+    if names_item:
+        item = _find_sale_item(npc, action)
+        if not item:
+            return False, "There is no such item for sale here.", None
+        return True, "", item
+
+    if _BUY_VERBS.search(action or ""):
+        if not inv:
+            return False, "They have nothing to sell.", None
+        return True, "", random.choice(inv)
+
+    if not inv:
+        return False, "They have nothing to sell.", None
+
+    return True, "", None
+
+
+def parse_give_amount(action, player):
+    """Authoritative coin amount the player intends to give (capped at wealth)."""
+    wealth = max(0, int(player.get("wealth") or 0))
+    if wealth <= 0:
+        return 0
+    m = _GIVE_AMOUNT.search(action or "")
+    if m:
+        return min(wealth, int(m.group(1)))
+    if re.search(r"\bgive\b", action or "", re.I):
+        return wealth
+    return 0
+
+
+def validate_give(action, player, npc):
+    """Refuse before wealth mutation. Returns (ok, message, amount)."""
+    if not npc:
+        return False, "There is no one here to give to.", 0
+    amount = parse_give_amount(action, player)
+    if amount <= 0:
+        return False, "You have no coin to give.", 0
+    return True, "", amount
 
 
 def _remove_npc_item(npc, item):
@@ -22,92 +120,81 @@ def _remove_npc_item(npc, item):
     return item
 
 
-def resolve_trade(player, npc, success, tick=None, location=None):
+def resolve_trade(player, npc, success, tick=None, location=None, *, sale_item=None):
     """
-    On success: player buys from NPC or sells nothing — coin moves.
+    On success: player buys a validated item — coin moves.
     Returns (directive_text, player_changed, npc_changed).
     """
+    if sale_item is None:
+        return (
+            "TRADE REFUSED — no goods change hands; wealth unchanged.",
+            False, False,
+        )
+
     p_wealth = player.get("wealth", 0)
     n_wealth = npc.get("wealth", random.randint(20, 80))
     npc.setdefault("wealth", n_wealth)
 
     if not success:
-        loss = random.randint(2, 8)
-        player["wealth"] = max(0, p_wealth - loss)
         return (
-            f"The deal falls apart — you lose {loss} coin to pride or a sharper tongue.",
-            True, False,
-        )
-
-    item = _pick_npc_item(npc)
-    if item and p_wealth >= item.get("value", 15):
-        price = max(5, int(item.get("value", 20) * random.uniform(0.85, 1.15)))
-        if p_wealth >= price:
-            player["wealth"] = p_wealth - price
-            npc["wealth"] = n_wealth + price
-            gained = _remove_npc_item(npc, item)
-            player.setdefault("inventory", []).append(gained)
-            log_event("trade", "player", "trade", target=npc.get("id"),
-                      location=location, effects=[gained.get("name", "goods")], tick=tick)
-            rarity = gained.get("rarity", "common")
-            mods = gained.get("stat_mods") or {}
-            mod_hint = ""
-            if mods:
-                mod_hint = " (" + ", ".join(f"+{v} {k}" for k, v in mods.items()) + ")"
-            return (
-                f"Coin changes hands — you acquire {gained.get('name', 'something')} "
-                f"[{rarity}]{mod_hint} for {price} coin. The exchange is real; show the weight of it.",
-                True, True,
-            )
-
-    # coin-only haggle when no item or too poor
-    if success:
-        discount = random.randint(3, 12)
-        player["wealth"] = p_wealth + discount
-        npc["wealth"] = max(0, n_wealth - discount)
-        log_event("trade", "player", "trade", target=npc.get("id"),
-                  location=location, effects=["haggle"], tick=tick)
-        return (
-            f"You wring {discount} coin from the bargain — small victory, remembered.",
-            True, True,
-        )
-
-    return ("No goods change hands.", False, False)
-
-
-def resolve_give(player, npc, success, tick=None, location=None):
-    """Offer coin or an item to the focal NPC."""
-    if not success:
-        return (
-            "The offer is refused or misread — awkwardness, not gratitude.",
+            "The deal falls apart — no coin or goods change hands.",
             False, False,
         )
 
-    inv = player.get("inventory") or []
-    if inv and random.random() < 0.55:
-        item = inv.pop(0)
-        player["inventory"] = inv
-        npc.setdefault("inventory", []).append(item)
-        item["owner"] = npc.get("id")
-        log_event("help", "player", "help", target=npc.get("id"),
-                  location=location, effects=[item.get("name", "gift")], tick=tick)
+    price = max(5, int(sale_item.get("value", 20) * random.uniform(0.85, 1.15)))
+    if p_wealth < price:
         return (
-            f"You give {item.get('name', 'something')} — a real loss, their surprise matters.",
-            True, True,
+            f"You cannot afford {sale_item.get('name', 'that')} ({price} coin). "
+            "No wealth deducted.",
+            False, False,
         )
 
-    amount = min(player.get("wealth", 0), random.randint(3, 15))
-    if amount > 0:
-        player["wealth"] = player.get("wealth", 0) - amount
-        npc["wealth"] = npc.get("wealth", 0) + amount
-        log_event("help", "player", "help", target=npc.get("id"),
-                  location=location, effects=[f"{amount}_coin"], tick=tick)
-        return (
-            f"You press {amount} coin into their hand. Charity or bribe — they will read it their way.",
-            True, True,
-        )
-
+    player["wealth"] = p_wealth - price
+    npc["wealth"] = n_wealth + price
+    gained = _remove_npc_item(npc, sale_item)
+    player.setdefault("inventory", []).append(gained)
+    log_event("trade", "player", "trade", target=npc.get("id"),
+              location=location, effects=[gained.get("name", "goods")], tick=tick)
+    rarity = gained.get("rarity", "common")
+    mods = gained.get("stat_mods") or {}
+    mod_hint = ""
+    if mods:
+        mod_hint = " (" + ", ".join(f"+{v} {k}" for k, v in mods.items()) + ")"
     return (
-        "You have nothing to give but words — make that enough or not.",
-        False, False,
+        f"MECHANICAL FACT: {price} coin deducted; wealth now {player['wealth']}. "
+        f"Player acquires {gained.get('name', 'something')} [{rarity}]{mod_hint}. "
+        f"Describe exactly this exchange — do not invent other prices or goods.",
+        True, True,
+    )
+
+
+def resolve_give(player, npc, success, tick=None, location=None, *, amount=0):
+    """Offer coin to the focal NPC — amount is simulation-authoritative."""
+    if amount <= 0:
+        return (
+            "GIVE REFUSED — you have nothing to give; wealth unchanged.",
+            False, False,
+        )
+
+    if not success:
+        return (
+            "The offer is refused or misread — no coin changes hands.",
+            False, False,
+        )
+
+    wealth_before = player.get("wealth", 0)
+    if wealth_before < amount:
+        return (
+            "You do not have that much coin.",
+            False, False,
+        )
+
+    player["wealth"] = wealth_before - amount
+    npc["wealth"] = npc.get("wealth", 0) + amount
+    log_event("help", "player", "help", target=npc.get("id"),
+              location=location, effects=[f"{amount}_coin"], tick=tick)
+    return (
+        f"MECHANICAL FACT: {amount} coin given; your wealth is now {player['wealth']}. "
+        f"Describe exactly {amount} coin — single unit, no invented denominations.",
+        True, True,
     )

@@ -47,13 +47,13 @@ from simulation.scene_events import maybe_scene_event
 from simulation.immersion_context import (
     format_rumor_whispers, build_player_inner_voice,
 )
-from simulation.economy_engine import resolve_trade, resolve_give
+from simulation.economy_engine import resolve_trade, resolve_give, validate_trade, validate_give
 from simulation.travel_digest import snapshot_before_travel, build_arrival_digest
 from simulation.area_discovery import record_area_arrival, area_intro_directive
 from simulation.player_goals import update_player_goals, active_goal_hint
 from simulation.player_commands import try_meta_command
 from simulation.npc_schedule import apply_schedules_to_npcs, next_appearance, schedule_hint
-from simulation.investigation_engine import build_investigation_context
+from simulation.investigation_engine import build_investigation_context, validate_accuse
 from simulation.faction_reputation import apply_action_standing, ensure_faction_standing, check_faction_invitations
 from simulation.institution_membership import (
     apply_institution_standing, check_institution_invitations, apply_guild_work_standing,
@@ -78,6 +78,7 @@ from simulation.action_resolution import (
     resolve_combat_target,
     pick_explore_hook,
     try_acquire_item,
+    validate_acquire_item,
     resolve_find_person,
     build_scene_presence_facts,
     build_find_facts,
@@ -776,21 +777,28 @@ def process_player_action(action, *, on_prose_chunk=None):
     if kind in ("search", "examine") or (
         kind == "general" and not extract_find_name_query(action)
     ):
-        check = action_ctx.get("skill_check")
-        success = True if kind == "search" else (check["success"] if check else True)
-        item_note, item = try_acquire_item(
-            action, player, area_ctx, tick, skill_success=success,
-        )
-        if item_note:
-            action_ctx["acquired_item"] = {
-                "id": item["id"], "name": item["name"],
-                "category": item.get("category"), "rarity": item.get("rarity"),
-            } if item else None
+        ok_acquire, acquire_refusal = validate_acquire_item(action, player, area_ctx)
+        if not ok_acquire:
+            action_ctx["search_refused"] = True
             action_ctx["story_directive"] = (
-                action_ctx.get("story_directive", "") + " " + item_note
+                action_ctx.get("story_directive", "") + " " + acquire_refusal
             ).strip()
-            with state_lock():
-                save(PLAYER_FILE, player)
+        else:
+            check = action_ctx.get("skill_check")
+            success = True if kind == "search" else (check["success"] if check else True)
+            item_note, item = try_acquire_item(
+                action, player, area_ctx, tick, skill_success=success,
+            )
+            if item_note:
+                action_ctx["acquired_item"] = {
+                    "id": item["id"], "name": item["name"],
+                    "category": item.get("category"), "rarity": item.get("rarity"),
+                } if item else None
+                action_ctx["story_directive"] = (
+                    action_ctx.get("story_directive", "") + " " + item_note
+                ).strip()
+                with state_lock():
+                    save(PLAYER_FILE, player)
 
     if kind in ("search", "confess") and player.get("last_combat_target"):
         post = build_post_combat_facts(player, npcs)
@@ -799,18 +807,45 @@ def process_player_action(action, *, on_prose_chunk=None):
     if kind in ("investigate", "ask_about", "accuse", "blackmail"):
         areas_data = load(AREAS_FILE, {})
         present_ids = [n["id"] for n in present]
-        _, npcs_changed = ensure_case(
-            player, player.get("area"), npcs, areas_data, present_ids=present_ids,
-        )
-        case_note = advance_case(player, kind, action_ctx, npcs)
-        inv_dir, _, _sec = build_investigation_context(
-            action, player, present, world, action_ctx,
-        )
-        parts = [p for p in (inv_dir, case_note) if p]
-        if parts:
-            action_ctx["story_directive"] = (
-                action_ctx.get("story_directive", "") + " " + " ".join(parts)
-            ).strip()
+        target_npc = None
+        tid = action_ctx.get("target_id")
+        if tid:
+            target_npc = next((n for n in present if n["id"] == tid), None)
+
+        if kind == "investigate":
+            _, npcs_changed = ensure_case(
+                player, player.get("area"), npcs, areas_data, present_ids=present_ids,
+            )
+        else:
+            npcs_changed = False
+
+        if kind == "accuse":
+            accuse_ok, accuse_refusal = validate_accuse(action, player, target_npc, npcs)
+            if not accuse_ok:
+                action_ctx["accuse_refused"] = True
+                action_ctx["story_directive"] = (
+                    action_ctx.get("story_directive", "") + " " + accuse_refusal
+                ).strip()
+            else:
+                case_note = advance_case(player, kind, action_ctx, npcs)
+                inv_dir, _, _sec = build_investigation_context(
+                    action, player, present, world, action_ctx,
+                )
+                parts = [p for p in (inv_dir, case_note) if p]
+                if parts:
+                    action_ctx["story_directive"] = (
+                        action_ctx.get("story_directive", "") + " " + " ".join(parts)
+                    ).strip()
+        else:
+            case_note = advance_case(player, kind, action_ctx, npcs)
+            inv_dir, _, _sec = build_investigation_context(
+                action, player, present, world, action_ctx,
+            )
+            parts = [p for p in (inv_dir, case_note) if p]
+            if parts:
+                action_ctx["story_directive"] = (
+                    action_ctx.get("story_directive", "") + " " + " ".join(parts)
+                ).strip()
         with state_lock():
             save(PLAYER_FILE, player)
             if npcs_changed:
@@ -861,21 +896,43 @@ def process_player_action(action, *, on_prose_chunk=None):
         success = check["success"] if check else True
         if target_npc:
             if kind == "trade":
-                economy_directive, p_chg, n_chg = resolve_trade(
-                    player, target_npc, success, tick=tick,
-                    location=player.get("area") or player.get("location"),
-                )
+                trade_ok, trade_refusal, sale_item = validate_trade(action, target_npc)
+                if not trade_ok:
+                    action_ctx["trade_refused"] = True
+                    action_ctx["story_directive"] = (
+                        action_ctx.get("story_directive", "")
+                        + " TRADE REFUSED — "
+                        + trade_refusal
+                        + " No coin deducted; no goods acquired."
+                    ).strip()
+                else:
+                    economy_directive, p_chg, n_chg = resolve_trade(
+                        player, target_npc, success, tick=tick,
+                        location=player.get("area") or player.get("location"),
+                        sale_item=sale_item,
+                    )
             else:
-                economy_directive, p_chg, n_chg = resolve_give(
-                    player, target_npc, success, tick=tick,
-                    location=player.get("area") or player.get("location"),
-                )
-            if p_chg or n_chg:
-                npcs[tid] = target_npc
-                with state_lock():
-                    save(PLAYER_FILE, player)
-                    save(NPC_FILE, npcs)
-            if economy_directive:
+                give_ok, give_refusal, amount = validate_give(action, player, target_npc)
+                if not give_ok:
+                    action_ctx["give_refused"] = True
+                    action_ctx["story_directive"] = (
+                        action_ctx.get("story_directive", "")
+                        + " GIVE REFUSED — "
+                        + give_refusal
+                        + " Wealth unchanged."
+                    ).strip()
+                else:
+                    economy_directive, p_chg, n_chg = resolve_give(
+                        player, target_npc, success, tick=tick,
+                        location=player.get("area") or player.get("location"),
+                        amount=amount,
+                    )
+            if economy_directive and not action_ctx.get("trade_refused") and not action_ctx.get("give_refused"):
+                if p_chg or n_chg:
+                    npcs[tid] = target_npc
+                    with state_lock():
+                        save(PLAYER_FILE, player)
+                        save(NPC_FILE, npcs)
                 action_ctx["story_directive"] = (
                     action_ctx.get("story_directive", "") + " " + economy_directive
                 ).strip()
@@ -956,6 +1013,16 @@ def process_player_action(action, *, on_prose_chunk=None):
         goal_hint = active_goal_hint(player, area_arc)
         if goal_hint:
             action_ctx["story_directive"] = (action_ctx.get("story_directive", "") + " " + goal_hint).strip()
+
+    journal = player.get("journal") or []
+    if journal and kind in ("trade", "give", "search", "rest", "explore", "travel"):
+        prior_kind = journal[-1].get("kind")
+        if prior_kind in ("accuse", "blackmail", "confess"):
+            action_ctx["story_directive"] = (
+                action_ctx.get("story_directive", "")
+                + " THIS BEAT ONLY — resolve the current action; "
+                "do NOT continue prior accusation or confession framing."
+            ).strip()
 
     with state_lock():
         player = load(PLAYER_FILE, {})

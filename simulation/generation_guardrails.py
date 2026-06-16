@@ -104,6 +104,20 @@ def build_hard_constraints_block(focal_npc_id, focal_npc, scene_place, action_co
             "- TARGET UNCLEAR — no violence or directed dialogue toward a specific person. "
             "Protagonist must choose who they mean."
         )
+    if ctx.get("trade_refused"):
+        lines.append(
+            "- TRADE REFUSED — no coin spent, no goods acquired. "
+            "Do NOT invent a vendor, price, or transaction."
+        )
+    if ctx.get("give_refused"):
+        lines.append("- GIVE REFUSED — wealth unchanged.")
+    if ctx.get("search_refused"):
+        lines.append("- ACQUIRE REFUSED — nothing added to inventory.")
+    if ctx.get("accuse_refused"):
+        lines.append(
+            "- ACCUSE REFUSED — no case verdict, no guilt confirmed. "
+            "Resolve this beat only; do NOT continue prior accusation threads."
+        )
     if focal_npc_id and focal_npc:
         known_name = focal_npc.get("name")
         label = known_name or short_descriptor(focal_npc)

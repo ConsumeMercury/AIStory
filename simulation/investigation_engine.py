@@ -3,6 +3,7 @@ Investigation — ask about crimes, follow rumors, accuse, blackmail using secre
 """
 
 import random
+import re
 
 from storage import load
 from generation.npc_secrets import hidden_secrets, reveal_one_secret, expose_secret
@@ -10,6 +11,41 @@ from simulation.memory_retrieval import get_relevant_memories
 
 EVENT_FILE = "events/event_log.json"
 RUMOR_FILE = "rumors/rumors.json"
+
+
+def validate_accuse(action, player, target, npcs):
+    """
+    Refuse accusations with no active case before simulation advances mystery state.
+    Returns (ok, refusal_directive).
+    """
+    case = player.get("active_case")
+    if not case or case.get("solved"):
+        return False, (
+            "ACCUSE REFUSED — there is no active investigation to accuse anyone of. "
+            "Do NOT treat this as a solved crime or confirmed guilt. "
+            "One short beat: confusion, dismissal, or deflection — then stop."
+        )
+
+    victim_name = (case.get("victim_name") or "").lower()
+    if victim_name and action:
+        text = action.lower()
+        if re.search(r"\b(kill|killed|murder|murdered|slay|slain)\b", text):
+            if victim_name not in text and not any(
+                victim_name.split()[0] in w for w in text.split() if len(w) > 3
+            ):
+                return False, (
+                    f"ACCUSE REFUSED — no case links anyone here to that death. "
+                    f"The active case concerns {case.get('victim_name', 'another victim')}. "
+                    f"Do NOT invent a verdict. The focal NPC may react to a baseless charge."
+                )
+
+    if not target:
+        return False, (
+            "ACCUSE REFUSED — no one present to accuse. "
+            "Do NOT invent a confrontation."
+        )
+
+    return True, ""
 
 
 def _match_rumor(action, rumors):
@@ -81,6 +117,8 @@ def build_investigation_context(action, player, present, world, action_ctx):
         return "They ask around — few want to talk.", {}, None
 
     if kind == "accuse":
+        if action_ctx.get("accuse_refused"):
+            return action_ctx.get("story_directive", ""), {}, None
         if not target:
             return "Accusation with no one to accuse — awkward silence.", {}, None
         if success:

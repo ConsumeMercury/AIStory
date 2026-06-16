@@ -118,9 +118,20 @@ def _second_person_question(rest):
     return q
 
 
+def _clause_has_unresolved_subject(rest):
+    """True when a wh-clause still carries third-person subject pronouns."""
+    text = (rest or "").strip()
+    if re.match(r"^(she|he|they)\b", text, re.I):
+        return True
+    return bool(re.search(r"\b(she|he|they)\s+\w", text, re.I))
+
+
 def _format_wh_question(wh, rest):
     """Build a second-person question from wh-word + rewritten tail."""
     rest = _second_person_question(rest)
+    if wh in ("why", "how", "where", "when", "who", "if", "whether"):
+        if _clause_has_unresolved_subject(rest):
+            return None
     if wh == "why":
         if not re.match(r"^(did|do|were|was|have|has)\b", rest, re.I):
             rest = re.sub(r"^you\s+", "", rest, flags=re.I)
@@ -511,8 +522,9 @@ def interpret_action(action, player, present_npcs, world, npcs=None):
         if speech:
             ctx["player_speech"] = speech[:120]
         ctx["story_directive"] = (
-            f"The protagonist asks aloud: \"{(speech or action.strip())[:100]}\". "
-            f"Answers may lie, deflect, or trade truth for trust."
+            f"The protagonist asks"
+            + (f' aloud: "{speech[:100]}"' if speech else " — intent only, no quoted line")
+            + ". Answers may lie, deflect, or trade truth for trust."
         )
 
     elif kind == "accuse":
