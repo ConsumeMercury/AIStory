@@ -20,6 +20,8 @@ from simulation.faction_engine import run_faction_tick
 from simulation.relationship_engine import update_relationships
 from simulation.bestiary_engine import maintain_monsters
 from simulation.storyline_engine import advance_storylines
+from simulation.consequence_queue import process_pending
+from simulation.rival_engine import rival_tick
 from simulation.npc_memory_engine import process_memories
 
 # How many real-world seconds between world ticks.
@@ -64,6 +66,20 @@ def _run_tick():
             traceback.print_exc()
 
         try:
+            from simulation.district_state import advance_districts
+            advance_districts(tick=tick)
+        except Exception:
+            traceback.print_exc()
+
+        try:
+            from simulation.institution_leadership import process_leadership_succession
+            from storage import load as _load
+            world = _load("world/world_state.json", {})
+            process_leadership_succession(tick=tick, day=world.get("day"))
+        except Exception:
+            traceback.print_exc()
+
+        try:
             run_faction_tick(tick=tick)
         except Exception:
             traceback.print_exc()
@@ -84,6 +100,14 @@ def _run_tick():
             traceback.print_exc()
 
         try:
+            from simulation.rumor_belief import spread_rumor_beliefs
+            from storage import load as _load
+            world = _load("world/world_state.json", {})
+            spread_rumor_beliefs(tick=tick, day=world.get("day"))
+        except Exception:
+            traceback.print_exc()
+
+        try:
             advance_storylines(tick=tick)
         except Exception:
             traceback.print_exc()
@@ -99,13 +123,43 @@ def _run_tick():
             traceback.print_exc()
 
         try:
+            from storage import load as _load, save as _save
+            world = _load("world/world_state.json", {})
+            player = _load("player/player.json", {})
+            if player:
+                fired = process_pending(player, world)
+                if fired:
+                    player.setdefault("journal", []).append({
+                        "tick": tick,
+                        "day": world.get("day"),
+                        "kind": "delayed",
+                        "action": fired[0],
+                        "excerpt": fired[0][:200],
+                    })
+                from simulation.player_legacy import seed_legacy_rumors
+                from simulation.goal_events import maybe_goal_rumor
+                seed_legacy_rumors(player, tick=tick)
+                maybe_goal_rumor(player, tick=tick)
+                _save("player/player.json", player)
+        except Exception:
+            traceback.print_exc()
+
+        try:
+            from storage import load as _load, save as _save
+            player = _load("player/player.json", {})
+            npcs = _load("characters/npcs.json", {})
+            rival_tick(player, npcs, tick=tick)
+            _save("characters/npcs.json", npcs)
+        except Exception:
+            traceback.print_exc()
+
+        try:
             process_memories()
         except Exception:
             traceback.print_exc()
 
 
 def _simulation_loop():
-    pass
     while not _stop_event.is_set():
         _run_tick()
         # Sleep in small increments so stop_event is checked promptly
@@ -113,7 +167,6 @@ def _simulation_loop():
             if _stop_event.is_set():
                 break
             time.sleep(0.1)
-    pass
 
 
 def start():

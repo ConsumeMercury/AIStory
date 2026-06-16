@@ -8,6 +8,8 @@ to a world that has moved on — exactly the "more time passes => more
 events" feel the design wants.
 """
 
+from collections import deque
+
 from storage import load, save
 from simulation.world_clock import advance_clock
 
@@ -18,12 +20,41 @@ PLAYER_FILE = "player/player.json"
 MAX_BACKGROUND_TICKS = 24
 
 
-def list_destinations(current_area_id):
-    areas = load(AREAS_FILE, {})
+def list_destinations(current_area_id, areas=None):
+    areas = areas if areas is not None else load(AREAS_FILE, {})
     here = areas.get(current_area_id)
     if not here:
         return {}
     return dict(here.get("edges", {}))
+
+
+def edge_hours(from_id, to_id, areas=None):
+    """Direct edge cost in hours, or None if not adjacent."""
+    if not from_id or not to_id:
+        return None
+    areas = areas if areas is not None else load(AREAS_FILE, {})
+    return areas.get(from_id, {}).get("edges", {}).get(to_id)
+
+
+def path_hours(from_id, to_id, areas=None):
+    """Shortest travel time in hours across the area graph (BFS)."""
+    if not from_id or not to_id:
+        return None
+    if from_id == to_id:
+        return 0
+    areas = areas if areas is not None else load(AREAS_FILE, {})
+    queue = deque([(from_id, 0)])
+    seen = {from_id}
+    while queue:
+        node, cost = queue.popleft()
+        for nb, hours in areas.get(node, {}).get("edges", {}).items():
+            next_cost = cost + int(hours)
+            if nb == to_id:
+                return next_cost
+            if nb not in seen:
+                seen.add(nb)
+                queue.append((nb, next_cost))
+    return None
 
 
 def travel(destination_id, run_tick):

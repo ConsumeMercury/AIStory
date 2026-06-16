@@ -3,43 +3,30 @@ import os
 import uuid
 from datetime import datetime, timezone
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-EVENT_FILE = os.path.join(BASE_DIR, "events", "event_log.json")
+from storage import load, save
+
+EVENT_FILE = "events/event_log.json"
 
 _event_buffer = []
 
 
 def load_events():
-    if not os.path.exists(EVENT_FILE):
-        return []
+    events = load(EVENT_FILE, [])
+    return events if isinstance(events, list) else []
 
-    try:
-        with open(EVENT_FILE, "r") as f:
-            data = json.load(f)
-            return data if isinstance(data, list) else []
-    except json.JSONDecodeError:
-        # FIX: corrupted log recovery safety
-        return []
+
+def all_events():
+    """On-disk events plus buffered entries not yet flushed to disk."""
+    return load_events() + list(_event_buffer)
 
 
 def flush_events():
-    """Persist buffered events once per tick."""
     global _event_buffer
-
     if not _event_buffer:
         return
-
     events = load_events()
-
-    # FIX: ensure event list integrity
-    if not isinstance(events, list):
-        events = []
-
     events.extend(_event_buffer)
-
-    with open(EVENT_FILE, "w") as f:
-        json.dump(events, f, indent=2)
-
+    save(EVENT_FILE, events)
     _event_buffer = []
 
 
@@ -53,12 +40,9 @@ def log_event(event_type, actor, action, target=None, location=None, effects=Non
         "action": action,
         "target": target,
         "location": location,
-        "effects": effects or []
+        "effects": effects or [],
     }
-
-    # FIX: enforce consistent schema types early
     if not isinstance(event["effects"], list):
         event["effects"] = []
-
     _event_buffer.append(event)
     return event

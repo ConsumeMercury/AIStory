@@ -2,6 +2,8 @@ import random
 import json
 import os
 
+from storage import save as storage_save
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 FACTION_TYPES = ["guild", "empire", "tribe", "cult", "syndicate", "order"]
@@ -62,9 +64,7 @@ def generate_factions(count=4):
 
 
 def save_factions(data):
-    path = os.path.join(BASE_DIR, "world", "factions.json")
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
+    storage_save("world/factions.json", data)
 
 
 if __name__ == "__main__":

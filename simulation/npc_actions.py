@@ -20,6 +20,12 @@ from simulation.goal_engine import check_goal_progress
 from simulation.progression_engine import train_from_action
 from simulation.combat_engine import resolve_combat
 from simulation.relationship_engine import apply_interaction
+from simulation.npc_memory_engine import player_memories
+from simulation.npc_schedule import apply_schedules_to_npcs
+from simulation.storyline_behavior import apply_storyline_to_npc, apply_storyline_weights
+from simulation.hunting_engine import monsters_in_area
+from simulation.rumor_behavior import rumor_action_bias, rumor_relationship_nudge
+from simulation.institution_politics import politics_action_bias
 
 NPC_FILE = "characters/npcs.json"
 MON_FILE = "characters/monsters.json"
@@ -27,27 +33,96 @@ CFG_FILE = "system/config.json"
 RULES_FILE = "system/npc_rules.json"
 LOC_FILE = "world/locations.json"
 WORLD_FILE = "world/world_state.json"
+AREAS_FILE = "world/areas.json"
+INST_FILE = "world/institutions.json"
+PLAYER_FILE = "player/player.json"
 
 
-def choose_action(npc, trait_weights=None, weather="Clear"):
+_ROLE_BIAS = {
+    "merchant": {"trade": 18, "plan": 6},
+    "guard": {"fight": 12, "hide": 4},
+    "scholar": {"study": 16, "craft": 4},
+    "thief": {"hide": 10, "plan": 8},
+    "soldier": {"fight": 10, "hunt": 6},
+    "priest": {"help": 12, "socialise": 8},
+    "herbalist": {"craft": 14, "help": 8},
+    "blacksmith": {"craft": 16, "trade": 6},
+    "innkeeper": {"socialise": 14, "trade": 10},
+    "hunter": {"hunt": 18, "travel": 4},
+    "farmer": {"craft": 10, "trade": 6},
+    "sailor": {"travel": 14, "socialise": 6},
+    "mercenary": {"fight": 14, "hunt": 8},
+    "apothecary": {"craft": 14, "study": 6},
+    "scribe": {"study": 12, "craft": 8},
+}
+
+
+def _memory_bias(npc_id):
+    mems = player_memories(npc_id, 2)
+    if not mems:
+        return {}
+    top = mems[0]
+    val = top.get("valence", 0)
+    sal = top.get("salience", 0)
+    if val < -0.5 and sal > 28:
+        return {"fear_player": True}
+    if val > 0.45 and sal > 25:
+        return {"trust_player": True}
+    return {}
+
+
+def choose_action(npc, trait_weights=None, weather="Clear", memory_bias=None,
+                  areas=None, institutions=None, npc_id=None):
     t = npc.get("traits", {})
     tw = trait_weights or {}
+    bp = npc.get("behavior_profile", {})
+    mb = memory_bias or {}
 
     def w(trait):
         return t.get(trait, 0) * tw.get(trait, 1.0)
 
     weights = {
-        "trade":     w("greed") + 10,
-        "fight":     w("aggression"),
-        "hunt":      w("courage") * 0.6 + (t.get("aggression", 0) * 0.2),
-        "help":      w("kindness") + w("generosity") * 0.5,
-        "hide":      (100 - t.get("courage", 50)) * 0.6 + w("paranoia") * 0.3,
+        "trade":     w("greed") + 10 + bp.get("work", 0) * 0.08,
+        "fight":     w("aggression") + bp.get("risk", 0) * 0.1,
+        "hunt":      w("courage") * 0.6 + t.get("aggression", 0) * 0.2,
+        "help":      w("kindness") + w("generosity") * 0.5 + bp.get("kindness", 0) * 0.12,
+        "hide":      (100 - t.get("courage", 50)) * 0.6 + w("paranoia") * 0.3 + bp.get("caution", 0) * 0.1,
         "plan":      w("ambition") + w("wit") * 0.4,
         "study":     w("curiosity") + t.get("discipline", 0) * 0.3,
-        "craft":     t.get("discipline", 0) * 0.5 + 8,
-        "socialise": w("humor") + w("kindness") * 0.4 + 8,
+        "craft":     t.get("discipline", 0) * 0.5 + 8 + bp.get("work", 0) * 0.06,
+        "socialise": w("humor") + w("kindness") * 0.4 + 8 + bp.get("social", 0) * 0.12,
         "travel":    w("ambition") * 0.3 + w("curiosity") * 0.2,
     }
+
+    for action, bonus in _ROLE_BIAS.get(npc.get("role"), {}).items():
+        weights[action] = weights.get(action, 5) + bonus
+
+    # Scheduled activity strongly preferred when on routine
+    sched_act = npc.get("schedule_activity")
+    if sched_act and sched_act in weights:
+        weights[sched_act] = weights.get(sched_act, 5) + 22
+
+    primary_goal = (npc.get("goals") or [None])[0]
+    if primary_goal:
+        goal_actions = {
+            "accumulate wealth": "trade",
+            "gain power": "plan",
+            "help others": "help",
+            "settle an old score": "fight",
+            "uncover a secret": "study",
+        }
+        for fragment, act in goal_actions.items():
+            if fragment in primary_goal:
+                weights[act] = weights.get(act, 5) + 14
+                break
+
+    if mb.get("fear_player"):
+        weights["hide"] *= 2.2
+        weights["socialise"] *= 0.35
+        weights["fight"] *= 1.15
+    if mb.get("trust_player"):
+        weights["help"] *= 1.4
+        weights["socialise"] *= 1.2
 
     if weather in ("Storm", "Snow", "Fog"):
         weights["hide"] *= 1.5
@@ -56,6 +131,23 @@ def choose_action(npc, trait_weights=None, weather="Clear"):
         weights["travel"] *= 0.5
     elif weather == "Heatwave":
         weights["fight"] *= 1.2
+
+    if areas:
+        sl = areas.get(npc.get("area"), {}).get("storyline") or {}
+        mults, area_override = apply_storyline_to_npc(
+            npc, areas, tension=sl.get("tension", 30),
+        )
+        apply_storyline_weights(weights, mults)
+        if area_override:
+            npc["area"] = area_override
+
+    if npc_id:
+        rumor_action_bias(npc_id, weights)
+
+    if institutions and npc.get("institution"):
+        inst = institutions.get(npc["institution"].get("id"), {})
+        for act, mult in politics_action_bias(npc, inst).items():
+            weights[act] = weights.get(act, 5) * mult
 
     total = sum(weights.values())
     if total <= 0:
@@ -83,6 +175,12 @@ def simulate_npcs(tick=None):
     if not isinstance(npcs, dict):
         npcs = {}
 
+    apply_schedules_to_npcs(npcs, world, load(AREAS_FILE, {}))
+    areas = load(AREAS_FILE, {})
+    institutions = load(INST_FILE, {})
+    player = load(PLAYER_FILE, {})
+    player_area = player.get("area")
+
     max_npcs = config.get("max_npcs_per_tick", len(npcs))
     npc_ids = [i for i, n in npcs.items() if n.get("status") == "alive"]
     if not npc_ids:
@@ -93,8 +191,22 @@ def simulate_npcs(tick=None):
 
     for npc_id in active:
         npc = npcs[npc_id]
+        ts = npc.get("travel_state") or {}
+        if ts.get("hours_remaining", 0) > 0:
+            npc["last_action"] = "travel"
+            log_event(
+                "npc_action", npc_id, "travel",
+                location=npc.get("location"), effects=["in_transit"],
+                tick=tick,
+            )
+            continue
         location = npc.get("location", "unknown")
-        action = choose_action(npc, trait_weights, weather)
+        action = choose_action(
+            npc, trait_weights, weather, _memory_bias(npc_id),
+            areas=areas, institutions=institutions, npc_id=npc_id,
+        )
+        if player_area and npc.get("area") == player_area:
+            rumor_relationship_nudge(npc_id, player_present=True)
         effects = []
 
         try:
@@ -113,9 +225,10 @@ def simulate_npcs(tick=None):
                 effects.append("npc_death")
 
         elif action == "hunt":
-            # find a monster sharing this NPC's location (city key) — abstracted
-            prey = [m for m in monsters.values()
-                    if m.get("status") == "alive" and m.get("location")]
+            prey = monsters_in_area(npc.get("area"), monsters, city=npc.get("location"))
+            if not prey:
+                prey = [m for m in monsters.values()
+                        if m.get("status") == "alive" and m.get("location") == npc.get("location")]
             if prey:
                 target = random.choice(prey)
                 result = resolve_combat(npc, target)

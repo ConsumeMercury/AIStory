@@ -1,17 +1,9 @@
 """
 Per-NPC episodic memory.
 
-Each tick (after events are flushed) this turns fresh world events into
-MEMORIES held by the specific people they happened to or near:
-  * the actor and target of an event remember it strongly,
-  * co-located NPCs remember it faintly as witnesses,
-  * when someone dies, everyone who had a bond with them grieves
-    (bereavement), weighted by how close the bond was.
-
-Memories carry a salience (0-100) and an emotional valence (-1..1).
-Salience decays every tick; weak memories are forgotten so the store
-stays bounded (top MAX_PER_NPC kept). The narrator reads the strongest
-memories of whoever is on stage, so the past colours the present.
+Events become memories for actors, targets, witnesses, and bereaved kin.
+Player actions are recorded for every NPC present so the past shapes future
+behaviour in simulation and narration.
 """
 
 import random
@@ -23,11 +15,10 @@ EVENT_FILE = "events/event_log.json"
 NPC_FILE = "characters/npcs.json"
 REL_FILE = "characters/relationships.json"
 
-MAX_PER_NPC = 24
-DECAY = 0.985
+MAX_PER_NPC = 28
+DECAY = 0.984
 FORGET_BELOW = 6.0
 
-# event/action -> (template, valence, base_salience) for actor's memory
 _ACTOR_MEM = {
     "help":      ("did a kindness for {target}", 0.4, 30),
     "socialise": ("shared words with {target}", 0.2, 18),
@@ -36,11 +27,28 @@ _ACTOR_MEM = {
     "hunt":      ("hunted in the wilds", 0.2, 28),
     "study":     ("buried themselves in study", 0.1, 12),
 }
-# things done TO a target create the target's memory
+
 _TARGET_MEM = {
     "help":      ("was helped by {actor}", 0.6, 55),
     "socialise": ("was sought out by {actor}", 0.3, 25),
     "attack":    ("was attacked by {actor}", -0.9, 95),
+}
+
+# player action tag -> (summary template, valence, salience for direct target)
+# {action} = shortened player action text
+_PLAYER_MEM = {
+    "attack":    ("the outsider attacked them", -0.95, 98),
+    "help":      ("the outsider helped them", 0.7, 60),
+    "gift":      ("the outsider gave them something", 0.5, 45),
+    "threat":    ("the outsider threatened them", -0.8, 75),
+    "insult":    ("the outsider insulted them", -0.6, 55),
+    "theft":     ("the outsider tried to steal from them", -0.85, 80),
+    "trade":     ("the outsider traded with them", 0.15, 22),
+    "socialise": ("the outsider spoke with them", 0.2, 28),
+    "observation": ("the outsider watched them too closely", -0.15, 20),
+    "general":   ("the outsider did something they won't forget", 0.0, 18),
+    "withdrawal": ("the outsider turned away without a word", -0.1, 15),
+    "rest":      ("the outsider rested nearby", 0.05, 10),
 }
 
 
@@ -51,12 +59,14 @@ def _name(npcs, nid):
     return n["name"] if n else "someone"
 
 
-def _add(store, nid, text, valence, salience, tick, day, participants, location):
+def _add(store, nid, text, valence, salience, tick, day, participants, location, source="world"):
     mem = store.setdefault(nid, [])
     mem.append({
         "tick": tick, "day": day, "summary": text,
         "valence": round(valence, 2), "salience": float(salience),
         "participants": participants, "location": location,
+        "source": source,
+        "about_player": "player" in (participants or []) or "outsider" in text,
     })
 
 
@@ -69,6 +79,80 @@ def _decay_and_trim(store):
         store[nid] = kept[:MAX_PER_NPC]
 
 
+def record_player_action(present_npc_ids, memory_tag, action_text, location, tick, day,
+                         target_id=None, intensity=1.0):
+    """
+    Write episodic memories for NPCs who witnessed or were targeted by the player.
+    Called synchronously from story_loop on every player turn.
+    """
+    store = load(MEM_FILE, {})
+    tpl, val, sal = _PLAYER_MEM.get(memory_tag, _PLAYER_MEM["general"])
+    action_snip = (action_text or "")[:80].strip()
+    if action_snip:
+        witness_text = f"saw the outsider: {action_snip}"
+    else:
+        witness_text = f"saw the outsider nearby"
+
+    for nid in present_npc_ids:
+        if nid == target_id:
+            text = tpl
+            s = min(100, sal * intensity)
+            v = val
+        else:
+            text = witness_text
+            s = min(50, 14 * intensity)
+            v = val * 0.35
+
+        _add(store, nid, text, v, s, tick, day, ["player"], location, source="player")
+        if target_id and nid == target_id and action_snip:
+            _add(store, nid, f"when they {action_snip[:50]}", val, s * 0.6, tick, day,
+                 ["player"], location, source="player")
+
+    _decay_and_trim(store)
+    save(MEM_FILE, store)
+
+
+def player_memories(npc_id, n=5):
+    """Memories involving the player, strongest first."""
+    mems = load(MEM_FILE, {}).get(npc_id, [])
+    about = [m for m in mems if m.get("about_player") or "outsider" in m.get("summary", "")]
+    return sorted(about, key=lambda m: m["salience"], reverse=True)[:n]
+
+
+def memory_behavior(npc_id):
+    """
+    Behavioural directive for narrator/sim based on what this NPC remembers
+    about the player and recent strong memories.
+    """
+    about = player_memories(npc_id, 4)
+    if not about:
+        return "No history with the player — react as a stranger would."
+
+    top = about[0]
+    val = top.get("valence", 0)
+    sal = top.get("salience", 0)
+    summary = top.get("summary", "")
+
+    if val <= -0.7 and sal > 40:
+        return (
+            f"Remembers: {summary}. Behaviour: fear, hostility, or cold refusal — "
+            f"do not greet warmly; body language first."
+        )
+    if val <= -0.3 and sal > 25:
+        return (
+            f"Remembers: {summary}. Behaviour: guarded, shorter answers, watches exits."
+        )
+    if val >= 0.5 and sal > 35:
+        return (
+            f"Remembers: {summary}. Behaviour: slightly softer, may offer small help — "
+            f"still not effusive."
+        )
+    if val >= 0.2:
+        return f"Remembers: {summary}. Behaviour: neutral-positive, willing to talk briefly."
+
+    return f"Remembers: {summary}. Behaviour: cautious, noncommittal."
+
+
 def process_memories():
     events = load(EVENT_FILE, [])
     if not isinstance(events, list) or not events:
@@ -79,7 +163,6 @@ def process_memories():
     state = load(STATE_FILE, {"processed": []})
     processed = set(state.get("processed", []))
 
-    # decay existing memories once per call
     _decay_and_trim(store)
 
     fresh = [e for e in events[-60:] if isinstance(e, dict) and e.get("id") not in processed]
@@ -94,31 +177,34 @@ def process_memories():
         etype = e.get("type", "")
         loc = e.get("location")
         tick = e.get("tick")
-        day = None  # filled by narrator from world if needed
+        day = e.get("day")
 
-        # actor's own memory
         if actor and actor != "player" and action in _ACTOR_MEM:
             tmpl, val, sal = _ACTOR_MEM[action]
             _add(store, actor, tmpl.format(target=_name(npcs, target) if target else "someone"),
                  val, sal, tick, day, [a for a in (actor, target) if a], loc)
 
-        # target's memory (incl. being attacked by the player)
         key = "attack" if etype == "combat" else action
         if target and key in _TARGET_MEM:
             tmpl, val, sal = _TARGET_MEM[key]
             _add(store, target, tmpl.format(actor=_name(npcs, actor)),
                  val, sal, tick, day, [a for a in (actor, target) if a], loc)
 
-        # witnesses: co-located NPCs remember violence faintly
+        # player combat — target remembers (also handled in record_player_action, but events persist)
+        if etype == "combat" and actor == "player" and target:
+            _add(store, target, "was attacked by the outsider", -0.9, 95, tick, day,
+                 ["player", target], loc, source="player")
+
         if etype in ("combat", "conflict") and loc:
-            witnesses = [i for i, n in npcs.items()
-                         if n.get("location") == loc and i not in (actor, target)
-                         and n.get("status") == "alive"]
+            witnesses = [
+                i for i, n in npcs.items()
+                if n.get("status") == "alive" and i not in (actor, target)
+                and (n.get("location") == loc or n.get("area") == loc)
+            ]
             for w in random.sample(witnesses, k=min(3, len(witnesses))):
                 _add(store, w, "saw violence done nearby", -0.3, 22, tick, day,
                      [a for a in (actor, target) if a], loc)
 
-        # bereavement: a death is felt by everyone who had a bond with the dead
         if etype == "death" and actor:
             dead = actor
             dead_name = _name(npcs, dead)

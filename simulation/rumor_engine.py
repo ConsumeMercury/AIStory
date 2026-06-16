@@ -50,7 +50,7 @@ def load(filename):
             if not content:
                 return []
             return json.loads(content)
-    except:
+    except (json.JSONDecodeError, OSError):
         return []
 
 

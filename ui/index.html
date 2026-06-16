@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AIStory</title>
+  <link rel="stylesheet" href="/ui/styles.css?v=13" />
+</head>
+<body>
+  <div id="boot" class="boot">
+    <div class="boot-card">
+      <h1>AIStory</h1>
+      <p id="boot-msg">Connecting…</p>
+    </div>
+  </div>
+
+  <div id="create-screen" class="create-screen hidden">
+    <div class="create-card">
+      <h1>Who are you?</h1>
+      <p class="create-lead" id="create-lead">A stranger arrives…</p>
+      <form id="create-form" class="create-form">
+        <label class="field">
+          <span>Name</span>
+          <input type="text" id="c-name" name="name" placeholder="Your name" autocomplete="name" />
+        </label>
+        <label class="field">
+          <span>Age</span>
+          <input type="number" id="c-age" name="age" min="16" max="70" value="30" />
+        </label>
+        <fieldset class="field backgrounds" id="c-backgrounds">
+          <legend>Background</legend>
+        </fieldset>
+        <label class="field">
+          <span>Appearance — what people notice first</span>
+          <input type="text" id="c-appearance" name="appearance" placeholder="Weathered coat, sharp eyes…" />
+        </label>
+        <label class="field">
+          <span>What you carry or wear (optional)</span>
+          <input type="text" id="c-attire" name="attire" />
+        </label>
+        <label class="field">
+          <span>Why are you here (optional)</span>
+          <input type="text" id="c-motivation" name="motivation" placeholder="One sentence" />
+        </label>
+        <button type="submit" id="create-btn" class="create-submit">Begin your story</button>
+      </form>
+      <p class="create-note" id="create-note"></p>
+    </div>
+  </div>
+
+  <div id="app" class="app hidden">
+    <header class="status-bar" id="status-bar">
+      <span class="who-tag hidden" id="hdr-name"></span>
+      <span class="sep hidden" id="hdr-name-sep">•</span>
+      <span class="place" id="hdr-time">—</span>
+      <span class="sep">•</span>
+      <span id="hdr-weather">—</span>
+      <span class="sep">•</span>
+      <span class="place" id="hdr-place">—</span>
+      <span class="mini-bar">
+        <span>Health</span>
+        <span class="track"><span class="fill health" id="hdr-health-bar" style="width:0%"></span></span>
+        <span class="val" id="hdr-health-val">—</span>
+      </span>
+      <span class="mini-bar">
+        <span>Stamina</span>
+        <span class="track"><span class="fill stamina" id="hdr-stamina-bar" style="width:0%"></span></span>
+        <span class="val" id="hdr-stamina-val">—</span>
+      </span>
+      <span class="wealth-tag" id="hdr-wealth">—</span>
+    </header>
+
+    <div class="main-grid">
+      <aside class="sidebar" id="sidebar">
+        <div class="sb-section sb-char">
+          <div class="sb-label">Character</div>
+          <div class="name" id="sb-name">—</div>
+          <div class="meta" id="sb-meta">—</div>
+          <p class="char-motivation hidden" id="sb-motivation"></p>
+          <ul class="sb-goals hidden" id="sb-goals"></ul>
+          <p class="goal-hint hidden" id="sb-hint"></p>
+        </div>
+        <div class="sb-section">
+          <div class="sb-label">Sheets</div>
+          <button type="button" class="qa-btn" data-modal="character">Character sheet</button>
+          <button type="button" class="qa-btn" data-modal="inventory">
+            Inventory <span class="qa-badge hidden" id="badge-inv"></span>
+          </button>
+          <button type="button" class="qa-btn" data-modal="relations">
+            Bonds <span class="qa-badge hidden" id="badge-bonds"></span>
+          </button>
+          <button type="button" class="qa-btn" data-modal="rumors">
+            Rumors <span class="qa-badge hidden" id="badge-rumors"></span>
+          </button>
+          <button type="button" class="qa-btn" data-modal="world">World</button>
+          <button type="button" class="qa-btn" data-modal="map">Map &amp; travel</button>
+          <button type="button" class="qa-btn" data-modal="journal">Journal</button>
+          <button type="button" class="qa-btn" data-modal="codex">Codex</button>
+        </div>
+        <div class="sb-section sb-place">
+          <div class="sb-label">Here</div>
+          <div class="world-line"><strong>Weather</strong> <span id="sb-weather">—</span></div>
+          <div class="world-line"><strong>Mood</strong> <span id="sb-mood">—</span></div>
+        </div>
+      </aside>
+
+      <main class="story-column">
+        <div class="story-scroll" id="story-log"></div>
+
+        <footer class="action-dock">
+          <form class="input-row" id="action-form">
+            <span class="prompt">&gt;</span>
+            <input type="text" id="action-input" placeholder="Roleplay freely…" autocomplete="off" spellcheck="true" />
+            <button type="submit" id="send-btn">Send</button>
+          </form>
+          <div class="chip-row" id="chip-row"></div>
+        </footer>
+      </main>
+    </div>
+
+    <div id="sidebar-backdrop" class="sidebar-backdrop" aria-hidden="true"></div>
+
+    <nav class="mobile-tabs" id="mobile-tabs">
+      <button type="button" data-panel="story" class="active">Story</button>
+      <button type="button" data-panel="sheets">Sheets</button>
+      <button type="button" data-panel="character">Character</button>
+      <button type="button" data-panel="relations">Bonds</button>
+      <button type="button" data-panel="more">More</button>
+    </nav>
+  </div>
+
+  <div id="modal-backdrop" class="modal-backdrop hidden"></div>
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+    <header class="modal-head">
+      <h2 id="modal-title">Panel</h2>
+      <button type="button" id="modal-close" aria-label="Close">×</button>
+    </header>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+
+  <script src="/ui/app.js?v=13"></script>
+</body>
+</html>

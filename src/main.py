@@ -1,16 +1,22 @@
 import os
 import sys
-import json
 import random
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Without this, running `python src/main.py` fails with
-# ModuleNotFoundError: No module named 'generation' — because only the
-# src/ directory is on sys.path, not the project root that holds the
-# generation/ and simulation/ packages.
+if sys.platform == "win32":
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
+
+from config.load_env import load_env
+
+load_env()
 
 from generation.world_generator import generate_world, save_world
 from generation.location_generator import generate_locations, save_locations
@@ -21,7 +27,51 @@ from generation.monster_generator import spawn_for_area
 from generation.stats_generator import generate_stats
 from generation.family_generator import build_families
 from generation.institution_generator import build_institutions
+from generation.population_tuning import cap_area_density, tune_for_player
+from generation.district_population import assign_npcs_to_districts
+from generation.area_storylines import attach_area_storylines
+from generation.world_history import generate_world_history
+from simulation.npc_schedule import attach_schedules
+from generation.npc_secrets import attach_secrets
+from generation.personal_objectives import attach_personal_objectives
+from simulation.institution_politics import attach_politics
+from simulation.npc_drama import seed_drama
+from simulation.player_goals import build_player_goals, attach_goal_profile
 from simulation.progression_engine import level_for_xp
+from storage import load, save
+
+
+from game.setup import (
+    BACKGROUNDS,
+    ensure_world_data,
+    build_player,
+    save_new_player,
+    has_player,
+    world_data_ready,
+    _path as setup_path,
+)
+
+
+WORLD_REQUIRED = (
+    "world/world_state.json",
+    "world/factions.json",
+    "world/locations.json",
+    "world/areas.json",
+    "world/institutions.json",
+    "characters/npcs.json",
+    "characters/monsters.json",
+    "characters/relationships.json",
+    "player/player.json",
+)
+
+
+def _world_is_complete():
+    return world_data_ready() and has_player()
+
+
+def _clear_world_state():
+    from game.setup import _clear_world_state as clear_all
+    clear_all()
 
 
 def path(*parts):
@@ -29,239 +79,122 @@ def path(*parts):
 
 
 def _skills_from_background(flat_skills):
-    """Convert the background's flat skill scores into earned-XP skill nodes."""
-    # map legacy player skill names onto the shared skill vocabulary
-    rename = {"combat": "swordsmanship", "stealth": "lockpicking"}
-    skills = {}
-    for name, val in flat_skills.items():
-        key = rename.get(name, name)
-        xp = int(val) * 25
-        skills[key] = {"xp": xp, "level": level_for_xp(xp)}
-    return skills
+    from game.setup import _skills_from_background as conv
+    return conv(flat_skills)
 
 
-BACKGROUNDS = {
-    "soldier": {
-        "description": (
-            "You have spent years in service — enough to know that most wars "
-            "are decided before the first blow lands. Your body carries the record "
-            "of that education in ways no surgeon can fully explain."
-        ),
-        "skills": {"combat": 60, "persuasion": 20, "stealth": 15, "survival": 40, "arcana": 5},
-        "wealth": 30,
-        "traits": {"reputation": 40, "notoriety": 10},
-    },
-    "merchant": {
-        "description": (
-            "Coin and contracts are your native tongue. You have sat across negotiating "
-            "tables from men who wanted to ruin you, and you are still here. "
-            "You know the value of everything — and the price of silence."
-        ),
-        "skills": {"combat": 15, "persuasion": 65, "stealth": 25, "survival": 20, "arcana": 10},
-        "wealth": 80,
-        "traits": {"reputation": 55, "notoriety": 5},
-    },
-    "scholar": {
-        "description": (
-            "Years in dusty libraries left you soft in body but sharp in mind. "
-            "You see patterns where others see noise, and you have learned that "
-            "knowing the right question is worth more than a sword."
-        ),
-        "skills": {"combat": 10, "persuasion": 40, "stealth": 20, "survival": 15, "arcana": 70},
-        "wealth": 40,
-        "traits": {"reputation": 45, "notoriety": 0},
-    },
-    "thief": {
-        "description": (
-            "The city's underside raised you. You learned early that the law "
-            "is a story told by people with walls and locks, and that most doors "
-            "will open if you understand what they are afraid of."
-        ),
-        "skills": {"combat": 35, "persuasion": 30, "stealth": 75, "survival": 35, "arcana": 15},
-        "wealth": 20,
-        "traits": {"reputation": 25, "notoriety": 30},
-    },
-    "wanderer": {
-        "description": (
-            "No roots, no allegiances. The road has been your only constant, "
-            "and you have learned to read weather, people, and trouble "
-            "with the same practiced eye."
-        ),
-        "skills": {"combat": 30, "persuasion": 35, "stealth": 40, "survival": 60, "arcana": 20},
-        "wealth": 15,
-        "traits": {"reputation": 30, "notoriety": 5},
-    },
-}
-
-
-def create_character(location_keys):
-    print("\n" + "=" * 50)
-    print("  CHARACTER CREATION")
-    print("=" * 50 + "\n")
-
-    name = input("  Your name: ").strip()
-    if not name:
+def create_character(location_keys, city_display_name=None, auto=False):
+    if auto or os.environ.get("AISTORY_AUTO_CHAR"):
         name = "The Wanderer"
-
-    # age — matters for how the world treats you (academies, guilds, garrisons)
-    age = 30
-    raw_age = input("  Your age (16-70, Enter for 30): ").strip()
-    if raw_age.isdigit():
-        age = max(16, min(70, int(raw_age)))
-
-    print("\n  Choose your background:\n")
-    bg_keys = list(BACKGROUNDS.keys())
-    for i, key in enumerate(bg_keys, 1):
-        bg = BACKGROUNDS[key]
-        print(f"  [{i}] {key.upper()}")
-        print(f"      {bg['description']}")
-        print()
-
-    while True:
-        choice = input(f"  Enter a number (1-{len(bg_keys)}): ").strip()
-        if choice.isdigit() and 1 <= int(choice) <= len(bg_keys):
-            background_key = bg_keys[int(choice) - 1]
-            break
-        print("  Invalid choice, try again.")
-
-    background = BACKGROUNDS[background_key]
-
-    print("\n  Describe your appearance")
-    print("  (what others notice first — or press Enter to leave it unwritten):")
-    appearance = input("  > ").strip()
-    if not appearance:
+        age = 30
+        background_key = "soldier"
         appearance = "unremarkable in feature, the kind of face a crowd forgets"
+        motivation = "The road brought you here."
+    else:
+        print("\n" + "=" * 50)
+        print("  WHO ARE YOU?")
+        print("=" * 50 + "\n")
 
-    starting_location = location_keys[0] if location_keys else "unknown"
-    city_name = starting_location.replace("_", " ").title()
+        name = input("  Name: ").strip()
+        if not name:
+            name = "The Wanderer"
 
-    # combat stats for the player, derived from real age + background
-    stats = generate_stats(age=age, role=background_key, traits={
-        "courage": background["traits"].get("reputation", 40),
-        "aggression": 50, "discipline": 50,
-    })
+        age = 30
+        raw_age = input("  Age (16-70, Enter for 30): ").strip()
+        if raw_age.isdigit():
+            age = max(16, min(70, int(raw_age)))
 
-    player = {
-        "name": name,
-        "age": age,
-        "background": background_key,
-        "appearance": appearance,
-        "location": starting_location,
-        "area": None,                      # set in bootstrap once areas exist
-        "stats": stats,
-        "level": 1,
-        "xp": 0,
-        "health": stats["health"],         # legacy mirror
-        "wealth": background["wealth"],
-        "inventory": [],
-        "skills": _skills_from_background(background["skills"]),
-        "traits": background["traits"],
-        "story_flags": {},
-        "journal": [],
-        "met_npcs": [],
-        "known_npcs": {},                  # per-NPC: {name_known, seen_before, ...}
-    }
+        print("\n  Background — what life prepared you for:\n")
+        bg_keys = list(BACKGROUNDS.keys())
+        for i, key in enumerate(bg_keys, 1):
+            bg = BACKGROUNDS[key]
+            print(f"  [{i}] {key.upper()}")
+            print(f"      {bg['description']}\n")
 
-    print(f"\n  {background['description']}")
-    print(f"\n  You find yourself in {city_name}.\n")
-    print("=" * 50)
+        while True:
+            choice = input(f"  Choose (1-{len(bg_keys)}): ").strip()
+            if choice.isdigit() and 1 <= int(choice) <= len(bg_keys):
+                background_key = bg_keys[int(choice) - 1]
+                break
+            print("  Enter a number from the list.")
+
+        background = BACKGROUNDS[background_key]
+
+        print("\n  Appearance — what people notice first:")
+        appearance = input("  > ").strip()
+        if not appearance:
+            appearance = "unremarkable in feature, the kind of face a crowd forgets"
+
+        print("\n  What you carry or wear on your person (optional):")
+        attire = input("  > ").strip()
+        if attire:
+            appearance = f"{appearance}; {attire}"
+
+        print("\n  Why are you here — one sentence (optional):")
+        motivation = input("  > ").strip()
+        if not motivation:
+            motivation = "You are not sure yet. The road brought you."
+
+    player = build_player(name, age, background_key, appearance, motivation)
+    locations = load("world/locations.json", {})
+    cities = locations.get("cities", {})
+    city_key = player.get("location")
+    city_name = cities.get(city_key, {}).get("name") or (city_key or "unknown").replace("_", " ").title()
+    if not (auto or os.environ.get("AISTORY_AUTO_CHAR")):
+        background = BACKGROUNDS[background_key]
+        print("\n" + "-" * 50)
+        print(f"  {name}, {age}. {background['description']}")
+        print(f"\n  You look like: {player['appearance']}")
+        print(f"  You are here because: {motivation}")
+        if player["goals"]:
+            print(f"\n  What drives you: {player['goals'][0]['text']}")
+        print(f"\n  You arrive in {city_name} with little more than that.")
+        print("  (Type 'help' anytime — status, goals, map, factions, routines, bonds.)")
+        print("-" * 50 + "\n")
 
     return player
 
 
 def bootstrap_world():
-    os.makedirs(path("world"), exist_ok=True)
-    os.makedirs(path("characters"), exist_ok=True)
-    os.makedirs(path("events"), exist_ok=True)
-    os.makedirs(path("rumors"), exist_ok=True)
-    os.makedirs(path("saves"), exist_ok=True)
-    os.makedirs(path("player"), exist_ok=True)
-
-    if os.path.exists(path("world", "world_state.json")):
+    ensure_world_data()
+    if has_player():
         return
 
-    world = generate_world()
-    save_world(world)
-
-    locations = generate_locations()
-    save_locations(locations)
-
-    factions = generate_factions()
-    save_factions(factions)
-
-    location_keys = list(locations["cities"].keys())
-
-    npcs = generate_population(count=50, locations=location_keys)
-
-    # ---- families: cluster NPCs into households, seed kin bonds ----
-    npcs, relationships_seed = build_families(npcs, {})
-
-    # ---- area graph + assign NPCs to specific areas (districts) ----
-    areas = build_areas(locations["cities"])
-    # map each NPC into a district of the city it lives in
-    for npc in npcs.values():
-        city = npc.get("location")
-        city_areas = [a for a in areas if areas[a].get("city") == city]
-        if city_areas:
-            chosen = random.choice(city_areas)
-            npc["area"] = chosen
-
-    # ---- institutions: academies/guilds/temples/garrisons with arcs ----
-    institutions = build_institutions(npcs, areas, locations["cities"])
-
-    # ---- initial monsters in wilderness areas ----
-    monsters = {}
-    for aid, area in areas.items():
-        if area.get("type") == "wilderness":
-            for mon in spawn_for_area(area.get("area_type", "wilderness"),
-                                      count=random.randint(1, 3)):
-                mon["location"] = aid
-                mon["area"] = aid
-                monsters[mon["id"]] = mon
-
-    with open(path("characters", "npcs.json"), "w") as f:
-        json.dump(npcs, f, indent=2)
-    with open(path("world", "areas.json"), "w") as f:
-        json.dump(areas, f, indent=2)
-    with open(path("world", "institutions.json"), "w") as f:
-        json.dump(institutions, f, indent=2)
-    with open(path("characters", "monsters.json"), "w") as f:
-        json.dump(monsters, f, indent=2)
-    with open(path("characters", "relationships.json"), "w") as f:
-        json.dump(relationships_seed, f, indent=2)
-    with open(path("characters", "npc_memories.json"), "w") as f:
-        json.dump({}, f, indent=2)
-    with open(path("characters", "_mem_state.json"), "w") as f:
-        json.dump({"processed": []}, f, indent=2)
-    with open(path("characters", "memories.json"), "w") as f:
-        json.dump({}, f, indent=2)
-    with open(path("events", "event_log.json"), "w") as f:
-        json.dump([], f, indent=2)
-    with open(path("rumors", "rumors.json"), "w") as f:
-        json.dump([], f, indent=2)
-
-    player = create_character(location_keys)
-
-    # drop the player into a district of their starting city
-    start_city = player.get("location")
-    start_areas = [a for a in areas if areas[a].get("city") == start_city]
-    if start_areas:
-        player["area"] = sorted(start_areas)[0]
-
-    with open(path("player", "player.json"), "w") as f:
-        json.dump(player, f, indent=2)
+    locations = load("world/locations.json", {})
+    player = create_character(
+        list(locations.get("cities", {}).keys()),
+        auto=bool(os.environ.get("AISTORY_AUTO_CHAR")),
+    )
+    save_new_player(player)
 
 
 def game_loop():
-    from simulation.story_loop import process_player_action
+    from storage import load
+    from simulation.story_loop import process_player_action, generate_opening_scene
     from simulation import simulation_runner
+    from simulation.gemini_client import api_key
+    from simulation.world_patch import ensure_world_extensions
 
     player_path = path("player", "player.json")
     if not os.path.exists(player_path):
         print("\nNo character found.\n")
         return
 
+    if not api_key():
+        print(
+            "\nSet GEMINI_API_KEY (or GOOGLE_API_KEY) before playing.\n"
+            "Get a key: https://aistudio.google.com/apikey\n"
+        )
+        return
+
+    ensure_world_extensions()
+
     simulation_runner.start()
+
+    opening = generate_opening_scene()
+    if opening:
+        print()
+        print(opening)
 
     try:
         while True:
@@ -279,6 +212,14 @@ def game_loop():
                 scene = process_player_action(action)
                 print()
                 print(scene)
+                from simulation.player_commands import try_meta_command
+                from simulation.action_hints import build_action_hints
+                if try_meta_command(action) is None:
+                    player = load("player/player.json", {})
+                    last_kind = (player.get("journal") or [{}])[-1].get("kind")
+                    hint = build_action_hints(player, last_kind=last_kind)
+                    if hint:
+                        print(hint)
             except Exception as e:
                 print(f"\n[{e}]")
 

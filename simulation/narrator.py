@@ -1,256 +1,334 @@
 """
-The narrator builds the prompt for the local model (Ollama) and returns prose.
-
-Design goals encoded here:
-  * Identity through description, not labels. A person the player hasn't been
-    introduced to is referred to ONLY by a physical descriptor. The name is
-    passed to the model exclusively for NPCs the player already knows.
-  * Pronouns are LOCKED and stated explicitly, so the model can't drift.
-  * Personality is conveyed as behavioural CUES (derived from traits) plus a
-    private mannerism/want — never named adjectives. "Show, don't tell."
-  * Slow burn: the relationship toward the player is summarised qualitatively
-    so dialogue can reflect it without numbers, and without lurching.
-  * Novel feel: long output, continuity with remembered events, end on tension.
-  * Restraint with introductions: at most one or two newcomers per scene.
+Novel-style scene generation — one person, one moment, literary prose.
 """
 
-import requests
+import os
 
-from generation.descriptor_generator import short_descriptor
-from generation.trait_generator import dominant_traits
-from simulation.npc_memory_engine import top_memories
+from generation.descriptor_generator import short_descriptor, appearance_notes, gender_noun, gender_label as npc_gender_label
+from simulation.npc_memory_engine import top_memories, memory_behavior, player_memories
+from simulation.narrator_variety import (
+    build_avoid_repeating, compress_npc_memories, speech_hint,
+    scene_mode_rules, scene_length_hint, build_continuity_note,
+)
+from simulation.scene_coherence import (
+    build_conversation_ledger,
+    stable_persona_block,
+    place_label,
+    DIALOGUE_KINDS,
+)
+from simulation.action_resolution import build_inventory_facts, build_post_combat_facts
+from simulation.trait_cues import pick_scene_focus, pick_trait_cues
+from simulation.player_identity import player_alias
+from simulation.immersion_context import (
+    institution_affiliation, npc_active_want,
+)
+from simulation.novel_craft import CRAFT_CORE, craft_for_kind, narrative_outcome, token_budget_for_kind
+from simulation.gemini_client import generate_text
+from storage import load
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL = "qwen3:14b"
+DEBUG_TOKENS = os.environ.get("AISTORY_DEBUG_TOKENS", "").lower() in ("1", "true", "yes")
 
-# trait -> behaviour the model should SHOW (never name)
-TRAIT_CUES = {
-    "aggression":     "takes up more space than needed; quick to close distance",
-    "kindness":       "drifts toward whoever in the room is worst off",
-    "greed":          "prices everything with a glance, including people",
-    "ambition":       "watches the room for whoever matters most",
-    "loyalty":        "keeps placing themselves between trouble and one particular person",
-    "honesty":        "answers plainly even when a lie would serve better",
-    "pride":          "will not be seen to need anything",
-    "curiosity":      "leans in at the wrong moments, asks one question too many",
-    "patience":       "lets silences run long without filling them",
-    "temper":         "a muscle works in the jaw before they speak",
-    "discipline":     "everything about them is squared away, nothing wasted",
-    "humor":          "finds the joke a half-second before it's appropriate",
-    "vanity":         "checks reflections, adjusts cuffs, minds the angle of their face",
-    "paranoia":       "maps the exits, keeps their back to the wall",
-    "generosity":     "the first to put coin or bread on the table",
-    "sentimentality": "touches a worn keepsake when they think no one sees",
-    "vindictiveness": "keeps a ledger of slights behind a pleasant face",
-    "piety":          "marks small rituals, a touched amulet, a murmured word",
-    "wit":            "two steps ahead in conversation, lays small traps",
-    "courage":        "doesn't step back when a wiser person would",
-    "impulsiveness":  "acts on the first instinct, words out before the thought finishes",
-    "secretiveness":  "gives nothing away, deflects questions onto you",
-    "superstition":   "reads the room for omens, won't sit thirteen to a table",
-    "gregariousness": "fills silences, knows everyone's name, works the room",
-    "ruthlessness":   "weighs people as means, discards them without heat",
-}
+_BACKGROUND_FOCUS = ("childhood", "formative_event", "current_situation", "belief", "hope", "secret")
+
+
+from simulation.relationship_thresholds import format_bond_summary
+from simulation.npc_schedule import schedule_hint
 
 
 def _relationship_tone(rel):
-    """Turn relationship numbers into a quiet behavioural hint for dialogue."""
     if not rel:
-        return "no particular feeling toward you yet"
-    fam = rel.get("familiarity", 0)
-    if fam < 5:
-        return "treats you as a stranger"
-    parts = []
-    if rel.get("resentment", 0) > 40 or rel.get("fear", 0) > 50:
-        parts.append("guarded and cold toward you")
-    if rel.get("trust", 0) > 45:
-        parts.append("has come to trust you")
-    if rel.get("affection", 0) > 40:
-        parts.append("warm toward you, though they'd not say so")
-    if rel.get("attraction", 0) > 45:
-        parts.append("more aware of you than they let on")
-    if rel.get("respect", 0) > 45:
-        parts.append("has started to respect you")
-    return "; ".join(parts) or "still taking your measure"
+        return "stranger — guarded, no bond yet"
+    return format_bond_summary(rel)
 
 
-def _npc_line(npc, known, is_new, rel):
+def _background_snippet(bg, focus_key):
+    val = (bg or {}).get(focus_key)
+    if not val:
+        return ""
+    return f"  (private history — never recite): {val[:120]}"
+
+
+def _npc_line(npc, known, is_new, rel, tick, name_reveal=None, institutions=None, action_kind=None):
+    nid = npc.get("id", "")
     pron = npc.get("pronouns", {})
-    label = npc["name"] if known else short_descriptor(npc)
+    g_noun = gender_noun(npc)
+    g_label = npc_gender_label(npc)
+    revealing = name_reveal and name_reveal.get("npc_id") == nid
+    label = npc["name"] if (known and not revealing) else short_descriptor(npc)
     role = npc.get("role", "stranger")
     age = npc.get("age", "?")
-    cues = [TRAIT_CUES[t] for t in dominant_traits(npc.get("traits", {}), 3) if t in TRAIT_CUES]
-    mannerism = npc.get("background", {}).get("mannerism", "")
-    want = (npc.get("goals") or ["get through the day"])[0]
-    last = npc.get("last_action") or "none"
-    phys = npc.get("physique", {})
     persona = npc.get("persona", {})
-    inst = npc.get("institution") or {}
+    bg = npc.get("background", {})
+    focus = pick_scene_focus(nid, tick)
+    bg_focus = _BACKGROUND_FOCUS[(tick + hash(nid)) % len(_BACKGROUND_FOCUS)]
+    cues = pick_trait_cues(npc.get("traits", {}), nid, tick, count=1)
+    mem_behaviour = memory_behavior(nid)
+    player_mems = player_memories(nid, 2)
+    mem_str = compress_npc_memories(player_mems or top_memories(nid, 1), focus)
+    affil = institution_affiliation(npc, institutions)
+    want_line = npc_active_want(npc) if focus == "want" else ""
+    dead_line = ""
+    if npc.get("status") == "dead":
+        dead_line = (
+            "  STATUS: DEAD — describe the body only. They do NOT speak, move, or react.\n"
+        )
 
-    # what this person remembers (their strongest memories), incl. of the player
-    mems = top_memories(npc.get("id"), 3)
-    mem_str = "; ".join(m["summary"] for m in mems) or "nothing that weighs on them yet"
-
-    if known:
-        head = f"{label} ({role}, ~{age}) — already known to you."
-        desc = ""
+    if revealing:
+        head = f"FOCAL PERSON — must speak name \"{name_reveal['name']}\" in dialogue this scene. Until then: {label}."
+    elif known:
+        head = f"FOCAL PERSON — {label}, {g_noun}, {role}, about {age}. You know their name."
     elif is_new:
-        head = f"[FIRST ENCOUNTER — describe physically, do NOT give a name] {label} ({role}, looks {phys.get('apparent_age','grown')})."
-        desc = (f"  Appearance to weave in (2 sentences): {phys.get('build','')}, {phys.get('height','')}, "
-                f"{phys.get('hair','')}, {phys.get('eyes','')}, {phys.get('skin','')} skin, "
-                f"{phys.get('distinguishing_mark','')}; wears {phys.get('attire','')}, "
-                f"carries {phys.get('accessory','')}.\n")
+        head = (
+            f"FOCAL PERSON — a {g_noun}, {role}, about {age}. "
+            f"Describe once: {appearance_notes(npc, 'face')}. No name yet."
+        )
     else:
-        head = f"{label} ({role}) — present, but you have not learned {pron.get('possessive','their')} name."
-        desc = ""
+        head = f"FOCAL PERSON — {label}, {g_noun}, {role}. Unnamed to you."
 
-    inst_line = ""
-    if inst:
-        inst_line = f"  Belongs to an institution as a {inst.get('role','member')}.\n"
+    gender_lock = (
+        f"  GENDER LOCK ({g_label}): use ONLY {pron.get('subject')}/{pron.get('object')}/"
+        f"{pron.get('possessive')} — never swap gender or pronouns.\n"
+    )
+    role_lock = ""
+    if action_kind in ("attack", "search", "confess"):
+        role_lock = (
+            f"  ROLE LOCK ({role}): describe them as a {role}; "
+            f"never label them guard/sailor/priest/scholar unless role={role}.\n"
+        )
+
+    imp = rel.get("_impression_hint") if isinstance(rel, dict) else ""
+    imp_line = f"  How they see you: {imp}\n" if imp else ""
+    mem_detail = f"  Specific memory to echo: {mem_str}\n" if mem_str and focus == "memory" else ""
+    affil_line = f"  {affil}\n" if affil else ""
+    want_block = f"  {want_line}\n" if want_line else ""
+    sched = schedule_hint(npc, None)
+    sched_line = f"  {sched}\n" if sched else ""
+    if action_kind in DIALOGUE_KINDS:
+        voice_block = stable_persona_block(npc)
+    else:
+        voice_block = f"  Voice: {speech_hint(persona, focus)}\n"
 
     return (
-        f"{head}\n{desc}"
-        f"  Pronouns (USE EXACTLY): {pron.get('subject','they')}/{pron.get('object','them')}/{pron.get('possessive','their')}\n"
-        f"  Show through behaviour, never name: {'; '.join(cues) if cues else 'reserved, hard to read'}\n"
-        f"  Mannerism (private, show don't state): {mannerism}\n"
-        f"  Speech: {persona.get('speech_style','plain')}; {persona.get('voice_quirk','')}. "
-        f"Holds the value: \"{persona.get('core_value','')}\". Current mood: {persona.get('mood','even')}.\n"
-        f"{inst_line}"
-        f"  Remembers (let this shape how they treat you — do not have them recite it): {mem_str}\n"
-        f"  Quietly wants: {want}. Last seen doing: {last}.\n"
-        f"  Feeling toward you (let it colour dialogue subtly): {_relationship_tone(rel)}"
+        f"{head}\n"
+        f"{dead_line}"
+        f"{gender_lock}"
+        f"{role_lock}"
+        f"  Pronouns: {pron.get('subject')}/{pron.get('object')}/{pron.get('possessive')}\n"
+        f"  Behaviour this beat: {cues[0] if cues else 'reserved'}\n"
+        f"{_background_snippet(bg, bg_focus)}\n"
+        f"{affil_line}{want_block}{sched_line}{imp_line}{mem_detail}"
+        f"  Memory of you: {mem_behaviour}\n"
+        f"{voice_block}"
+        f"  Bond: {_relationship_tone(rel)}"
     )
 
 
-def _build_npc_context(present, known_ids, new_ids, rels):
-    if not present:
-        return "You are alone here. Let the place itself carry the scene."
+def _build_npc_context(focus_npcs, known_ids, new_ids, rels, tick, name_reveal, player, crowd_note, action_kind=None):
+    if not focus_npcs:
+        return crowd_note + "\n\nNO FOCAL CHARACTER. Do not invent one."
+    institutions = load("world/institutions.json", {})
     lines = []
-    for npc in present[:3]:  # max 3 on stage; restraint
+    for npc in focus_npcs[:1]:
         nid = npc.get("id")
-        rel = rels.get(nid, {})
-        lines.append(_npc_line(npc, nid in known_ids, nid in new_ids, rel))
-    return "\n\n".join(lines)
+        rel = dict(rels.get(nid, {}))
+        imp = player.get("known_npcs", {}).get(nid, {}).get("impression")
+        if imp:
+            rel["_impression_hint"] = imp.get("hint")
+        lines.append(_npc_line(
+            npc, nid in known_ids, nid in new_ids, rel, tick, name_reveal, institutions,
+            action_kind=action_kind,
+        ))
+    return lines[0] + "\n\n" + crowd_note
+
+
+def _novel_action_block(action_context, player_speech):
+    if not action_context:
+        return "Continue from the protagonist's latest action — as a lived moment, not a summary."
+    directive = action_context.get("story_directive", "")
+    check = action_context.get("skill_check")
+    outcome = narrative_outcome(check)
+    speech_line = ""
+    if player_speech:
+        speech_line = (
+            f'The protagonist says ONLY this (quote exactly, once): "{player_speech}"\n'
+            "Do not add other lines for them.\n"
+        )
+    elif action_context.get("player_speech"):
+        ps = action_context["player_speech"]
+        speech_line = (
+            f'The protagonist says ONLY this (quote exactly, once): "{ps}"\n'
+            "Do not add other lines for them.\n"
+        )
+    else:
+        speech_line = (
+            "The protagonist does NOT speak this beat unless they are only observing or moving.\n"
+            "Do not invent dialogue for them.\n"
+        )
+    parts = [p for p in (speech_line, directive, outcome) if p]
+    return "\n".join(parts)
+
+
+def _novel_player_block(player, locals_know_name, action_kind=None, has_journal=False):
+    motivation = player.get("motivation", "")
+    mot_line = f" Why they are here: {motivation}." if motivation else ""
+    alias = player_alias(player)
+    name_note = (
+        f"Others may call them {player.get('name')}."
+        if locals_know_name else
+        f"Others do NOT know the name {player.get('name')}. Use \"you\" or \"{alias}\" only."
+    )
+    appearance = player.get("appearance", "unremarkable")
+    if has_journal and action_kind in (
+        "ask_name", "talk", "personal_talk", "threaten", "show_respect", "insult",
+        "give", "help", "attack", "confess", "search", "find",
+    ):
+        look_line = "Do NOT re-describe your appearance this beat."
+    else:
+        look_line = f"You look like: {appearance}."
+    return (
+        f"You are {player.get('age', '?')}, a {player.get('background', 'wanderer')}. "
+        f"{look_line}{mot_line} {name_note}"
+    )
 
 
 def generate_scene(player_action, world, player, present_npcs,
                    memories, rumors=None, new_npcs=None,
                    known_ids=None, relationships=None, extra_directive=None,
-                   local_arc=None):
+                   local_arc=None, tick=0, action_context=None,
+                   name_reveal=None, locals_know_player_name=False,
+                   crowd_note="", scene_event=None,
+                   immersion_block=""):
     known_ids = set(known_ids or [])
     new_ids = {n.get("id") for n in (new_npcs or [])}
     rels = relationships or {}
+    journal = player.get("journal") or []
+    has_journal = bool(journal)
+    kind = (action_context or {}).get("kind", "general")
 
-    world_line = (
-        f"{world.get('world_name','Unknown')} — Day {world.get('day',1)}, "
-        f"{world.get('time_of_day','day')} ({world.get('hour',0)}:00), "
-        f"{world.get('season','')}, {world.get('weather','')}. "
-        f"Regional stability {world.get('global_stability',50)}/100."
+    setting = (
+        f"{world.get('world_name', 'Unknown')}, day {world.get('day', 1)}, "
+        f"{world.get('time_of_day', 'day')}, {world.get('season', '')}, {world.get('weather', '')}."
     )
 
-    s = player.get("stats", {})
-    skills = player.get("skills", {})
-    top_skills = sorted(skills, key=lambda k: skills[k].get("level", 0), reverse=True)[:3]
-    skills_str = ", ".join(f"{k} L{skills[k]['level']}" for k in top_skills) or "none of note"
-    player_block = (
-        f"Name: {player.get('name','Unknown')}  ({player.get('background','wanderer')}, age {player.get('age','?')})\n"
-        f"Appearance: {player.get('appearance','unremarkable')}\n"
-        f"Where: {player.get('location','unknown')} / {player.get('area','')}\n"
-        f"Health {s.get('health','?')}/{s.get('max_health','?')}  "
-        f"Stamina {s.get('stamina','?')}/{s.get('max_stamina','?')}  Wealth {player.get('wealth',0)}\n"
-        f"Best skills: {skills_str}"
+    aid = player.get("area")
+    areas = load("world/areas.json", {})
+    area = areas.get(aid, {}) if aid else {}
+    place = place_label(player, area) or player.get("location", "")
+    if area.get("atmosphere") and kind in ("explore", "travel", "rest") and not has_journal:
+        place += " — " + (area["atmosphere"][0] if area["atmosphere"] else "")
+
+    focus_npc_id = None
+    if present_npcs:
+        focus_npc_id = present_npcs[0].get("id")
+    elif action_context:
+        focus_npc_id = action_context.get("target_id") or player.get("scene_focus")
+
+    npc_block = _build_npc_context(
+        present_npcs, known_ids, new_ids, rels, tick, name_reveal, player, crowd_note,
+        action_kind=kind,
     )
+    ledger_block = build_conversation_ledger(player, journal, focus_npc_id, action_context)
+    inv_facts = build_inventory_facts(player, action_context or {})
+    facts_parts = [p for p in (inv_facts,) if p]
+    if action_context:
+        if action_context.get("confession_facts") and kind == "confess":
+            facts_parts.insert(0, action_context["confession_facts"])
+        if kind in ("search", "confess") and player.get("last_combat_target"):
+            npcs_all = load("characters/npcs.json", {})
+            post = build_post_combat_facts(player, npcs_all)
+            if post:
+                facts_parts.append(post)
+    scene_facts = "\n\n".join(p for p in facts_parts if p)
+    action_block = _novel_action_block(action_context, action_context.get("player_speech") if action_context else None)
+    player_block = _novel_player_block(player, locals_know_player_name, kind, has_journal)
+    avoid_block = build_avoid_repeating(journal)
+    continuity_block = build_continuity_note(
+        journal, kind, player_action, player=player, action_context=action_context,
+    )
+    mode_block = scene_mode_rules(kind, has_journal)
+    length_block = scene_length_hint(kind, opening=not has_journal and kind == "explore")
 
-    npc_block = _build_npc_context(present_npcs, known_ids, new_ids, rels)
+    event_block = ""
+    if scene_event and kind not in ("ask_name", "talk", "personal_talk", "withdraw", "attack", "confess"):
+        block = (
+            f"\nSOMETHING HAPPENS (weave in naturally): {scene_event['text']}\n"
+            f"Outcome hint: {scene_event.get('narrative_outcome', '')}"
+        )
+        if scene_event.get("goal_note"):
+            block += f"\nGoal tie-in: {scene_event['goal_note']}"
+        event_block = block
 
-    mem_lines = []
-    for m in (memories or [])[-8:]:
-        if isinstance(m, dict) and m.get("actor") != "player":
-            mem_lines.append(f"- {m.get('actor','someone')} {m.get('action','').replace('_',' ')}"
-                             f" in {m.get('location','somewhere')}")
-    memory_block = "\n".join(mem_lines) or "Nothing of note has reached you yet."
+    arc = ""
+    if local_arc and local_arc.get("current") and kind not in (
+        "ask_name", "talk", "withdraw", "show_respect", "insult", "threaten", "give", "help",
+        "attack", "confess", "search",
+    ):
+        title = local_arc.get("title") or local_arc.get("institution", "")
+        arc = f"Local story ({title}): {local_arc['current']}."
 
-    rumor_block = "\n".join(
-        f"- {r.get('text','')}" for r in (rumors or [])[-3:]
-        if isinstance(r, dict) and r.get("text")
-    ) or "None worth repeating."
+    name_rule = ""
+    if name_reveal:
+        name_rule = (
+            f"\nIMPORTANT: {name_reveal['descriptor']} must say \"{name_reveal['name']}\" "
+            f"in spoken dialogue this scene before narration uses the name."
+        )
 
-    arc_block = "Nothing of institutional note here."
-    if local_arc and local_arc.get("current"):
-        arc_block = (f"At {local_arc['institution']} ({local_arc['type']}): "
-                     f"{local_arc['current']}. (tension {local_arc.get('tension',0)}/100) "
-                     f"Let this hang in the air of the place; surface it only if it fits.")
+    immersion = f"\n{immersion_block}\n" if immersion_block else ""
+    if not immersion_block:
+        extras = []
+        if rumors:
+            from simulation.immersion_context import format_rumor_whispers
+            whisper = format_rumor_whispers(
+                rumors[-3:],
+                city=player.get("location"),
+                area_name=area.get("name"),
+            )
+            if whisper:
+                extras.append(whisper)
+        if memories:
+            from simulation.immersion_context import format_world_echoes
+            echo = format_world_echoes(memories[:5])
+            if echo:
+                extras.append(echo)
+        if extras:
+            immersion = "\n" + "\n\n".join(extras) + "\n"
 
-    prompt = f"""You are the narrator of a long, slow-burn dark-fantasy novel. Second person, present tense, literary register.
+    craft_kind = craft_for_kind(kind)
+    token_budget = token_budget_for_kind(kind)
 
-NON-NEGOTIABLE RULES:
-1. Prose only. No questions to the reader, no "What do you do?", no lists, no headers.
-2. The player's action HAPPENS. Begin in the middle of it; never restate it as a heading.
-3. People the player has NOT been introduced to are referred to ONLY by physical description (e.g. "the broad-shouldered woman with burn-scarred forearms"). NEVER invent or reveal their name. Use a name ONLY for characters explicitly marked "already known to you."
-4. Use each character's stated pronouns EXACTLY and consistently. Never switch a character's pronouns within or across scenes.
-5. Reveal personality ONLY through behaviour, posture, objects, and what characters do with their hands and eyes. NEVER name a trait ("aggressive", "kind", "proud"). Show the clenched jaw, not the anger.
-6. This is a slow burn. Trust, fear, and affection shift by inches, not leaps. Let the relationship notes colour tone and dialogue subtly — do not announce feelings.
-7. Continuity is sacred. Honour the remembered events and rumours; let consequences linger. Nothing is forgotten.
-8. Characters ACT on what they personally remember (see each one's "Remembers" note) and speak in their own voice (see "Speech"). A person who remembers you attacking them does not greet you warmly. Never have them recite their memories like a report — let memory shape behaviour.
-9. At most ONE new person may be meaningfully introduced this scene. Do not crowd the stage.
-10. Dialogue is sparse and load-bearing — at most two short exchanges, voiced to each speaker's manner. Silence usually says more.
-11. End on motion, tension, or an unanswered weight. No tidy resolution.
-12. Write FIVE to SEVEN full paragraphs. Let the world breathe.
+    prompt = f"""{CRAFT_CORE}
 
-WORLD: {world_line}
+{craft_kind}
 
-WHAT HANGS OVER THIS PLACE:
-{arc_block}
+{length_block}
+{mode_block}
 
-YOU:
-{player_block}
+{continuity_block}
+{ledger_block}
+{scene_facts}
 
-PRESENT (only those actually here):
+SCENE:
+Setting: {setting}. Place: {place}.
+{arc}
+{event_block}
+{name_rule}
+
+PROTAGONIST: {player_block}
+
+THIS BEAT: {action_block}
+{('Note: ' + extra_directive) if extra_directive else ''}
+
 {npc_block}
 
-WHAT HAS BEEN HAPPENING (remembered, may surface):
-{memory_block}
+{avoid_block}
+{immersion}
 
-RUMOURS DRIFTING AROUND:
-{rumor_block}
-{('SPECIAL DIRECTIVE: ' + extra_directive) if extra_directive else ''}
+Write the scene now. Literary novel prose only — obey CRAFT, SCENE MODE, and DO NOT REPEAT."""
 
-THE PLAYER NOW: {player_action}
+    if DEBUG_TOKENS:
+        print("\n===== TOKEN DEBUG =====")
+        print("Prompt chars:", len(prompt))
+        print("Model:", os.environ.get("GEMINI_MODEL", "gemini-3.5-flash"))
+        print("======================\n")
 
-Write the scene."""
-
-    response = requests.post(
-        OLLAMA_URL,
-        json={
-            "model": MODEL,
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "temperature": 0.8,
-                "top_p": 0.9,
-                "repeat_penalty": 1.18,
-                "num_predict": 1100,   # longer, novel-length scenes
-            },
-        },
-        timeout=300,
-    )
-    response.raise_for_status()
-    
-    result = response.json()
-
-    print("\n===== TOKEN DEBUG =====")
-    print("Prompt chars:", len(prompt))
-    print("Estimated prompt tokens:", len(prompt) // 4)
-    print("Response chars:", len(result["response"]))
-    print("Estimated response tokens:", len(result["response"]) // 4)
-
-    # Some Ollama builds also include real counts:
-    if "prompt_eval_count" in result:
-        print("REAL prompt tokens:", result["prompt_eval_count"])
-    if "eval_count" in result:
-        print("REAL response tokens:", result["eval_count"])
-
-    print("======================\n")
-
-    return result["response"]
-    
+    return generate_text(prompt, max_tokens=token_budget, temperature=0.82, top_p=0.9)

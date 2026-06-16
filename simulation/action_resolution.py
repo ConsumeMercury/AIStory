@@ -1,0 +1,471 @@
+"""
+Hard-logic resolution for combat targets, item pickup, explore hooks, and confessions.
+Simulation decides facts; the narrator renders them.
+"""
+
+import re
+
+import re
+
+from generation.descriptor_generator import short_descriptor, appearance_notes, gender_label
+from generation.item_generator import generate_item
+from simulation.item_engine import resolve_loot_to_player, equip_item, ensure_equipment
+from simulation.scene_coherence import find_npc_by_name_in_text
+
+_ACQUIRE_VERBS = re.compile(
+    r"\b(find|look for|search for|take|pick up|pickup|grab|loot|strip|pull)\b", re.I,
+)
+_CONFESS = re.compile(
+    r"\b(i killed|i have killed|i've killed|murdered|confess|admit i killed)\b", re.I,
+)
+
+_ITEM_KEYWORDS = (
+    (re.compile(r"\b(sword|blade|cutlass|sabre|saber)\b", re.I), "weapon", "sword", "notched blade"),
+    (re.compile(r"\b(dagger|knife|stiletto)\b", re.I), "weapon", "dagger", None),
+    (re.compile(r"\b(axe|hatchet)\b", re.I), "weapon", "axe", None),
+    (re.compile(r"\b(bow|arrow)\b", re.I), "weapon", "bow", None),
+    (re.compile(r"\b(armor|armour|coat|vest|jack)\b", re.I), "armor", "leather coat", None),
+    (re.compile(r"\b(weapon|blade|steel)\b", re.I), "weapon", "sword", "notched blade"),
+)
+
+_FIND_PERSON = re.compile(
+    r"\bfind(?:\s+(?:the|a|an))?\s+(.+)$", re.I,
+)
+_DESC_HINTS = (
+    (re.compile(r"\bred[\s-]?hair(?:ed)?|\bauburn\b", re.I), lambda n: _hair_match(n, ("red", "auburn", "copper"))),
+    (re.compile(r"\b(grey|gray)[\s-]?hair|\bsilver[\s-]?hair\b", re.I), lambda n: _hair_match(n, ("grey", "gray", "silver", "white"))),
+    (re.compile(r"\b(captain|sailor|dockmaster|harbour master|harbor master)\b", re.I), lambda n: n.get("role") in ("sailor", "merchant", "guard")),
+    (re.compile(r"\b(priest|cleric|monk)\b", re.I), lambda n: n.get("role") == "priest"),
+    (re.compile(r"\b(merchant|trader)\b", re.I), lambda n: n.get("role") in ("merchant", "innkeeper")),
+    (re.compile(r"\b(woman|lady|girl)\b", re.I), lambda n: n.get("gender") == "female"),
+    (re.compile(r"\b(man|fellow|bloke)\b", re.I), lambda n: n.get("gender") == "male"),
+)
+
+
+def _hair_match(npc, colors):
+    hair = (npc.get("appearance") or {}).get("hair", "").lower()
+    return any(c in hair for c in colors)
+
+
+def match_npc_by_description(action, present):
+    """Match present NPCs by role/appearance hints in player text."""
+    if not action or not present:
+        return None
+    hits = []
+    for pattern, matcher in _DESC_HINTS:
+        if pattern.search(action):
+            for n in present:
+                try:
+                    if matcher(n):
+                        hits.append(n)
+                except Exception:
+                    continue
+    if len(hits) == 1:
+        return hits[0]
+    if len(hits) > 1:
+        return hits[0]
+    m = _FIND_PERSON.match(action.strip())
+    if m:
+        query = m.group(1).lower()
+        for n in present:
+            name = (n.get("name") or "").lower()
+            role = (n.get("role") or "").lower()
+            if query in name or query in role or name.split()[0].lower() in query:
+                return n
+    return None
+
+
+def resolve_pronoun_target(action, player, present):
+    """Resolve her/him/them to a present NPC using focus and last combat target."""
+    if not present:
+        return None
+    text = (action or "").lower()
+    focus = player.get("scene_focus")
+    last = player.get("last_combat_target")
+
+    female_hint = bool(re.search(r"\b(her|she|woman|girl|lady)\b", text))
+    male_hint = bool(re.search(r"\b(him|he|man|boy)\b", text)) and not re.search(r"\b(her|she|woman)\b", text)
+
+    if female_hint:
+        cands = [n for n in present if n.get("gender") == "female"]
+        if focus:
+            for n in cands:
+                if n["id"] == focus:
+                    return n
+        if len(cands) == 1:
+            return cands[0]
+        if cands:
+            return cands[0]
+
+    if male_hint:
+        cands = [n for n in present if n.get("gender") == "male"]
+        if last:
+            for n in cands:
+                if n["id"] == last:
+                    return n
+        if focus:
+            for n in cands:
+                if n["id"] == focus:
+                    return n
+        if len(cands) == 1:
+            return cands[0]
+        if cands:
+            return cands[0]
+
+    if last:
+        for n in present:
+            if n["id"] == last:
+                return n
+    if focus:
+        for n in present:
+            if n["id"] == focus:
+                return n
+    return None
+
+
+def resolve_combat_target(action, player, present, npcs, monsters, area, city):
+    """
+    Who the player actually fights. NPC targeting beats random present[0].
+    Returns (target_entity, kind) where kind is 'npc' or 'monster'.
+    """
+    from simulation.hunting_engine import monsters_in_area
+
+    mon_here = monsters_in_area(area, monsters, city=city) if area else []
+    text = (action or "").lower()
+
+    named = find_npc_by_name_in_text(action, npcs, player)
+    if named:
+        for n in present:
+            if n["id"] == named["id"]:
+                return n, "npc"
+
+    pron = resolve_pronoun_target(action, player, present)
+    if pron:
+        return pron, "npc"
+
+    focus = player.get("scene_focus")
+    if focus:
+        for n in present:
+            if n["id"] == focus:
+                return n, "npc"
+
+    last = player.get("last_combat_target")
+    if last and re.search(r"\b(again|anyway|still|finish|keep fighting)\b", text):
+        for n in present:
+            if n["id"] == last:
+                return n, "npc"
+
+    desc = match_npc_by_description(action, present)
+    if desc:
+        return desc, "npc"
+
+    if re.search(r"\b(monster|beast|wolf|creature|ghoul|stalker)\b", text) and mon_here:
+        return mon_here[0], "monster"
+
+    if present:
+        return present[0], "npc"
+
+    if mon_here:
+        return mon_here[0], "monster"
+
+    return None, None
+
+
+def pick_explore_hook(present, player):
+    """One real NPC to anchor first explore beat — not a ghost."""
+    if not present:
+        return None
+    focus = player.get("scene_focus")
+    if focus:
+        for n in present:
+            if n["id"] == focus:
+                return n
+    keyed = [n for n in present if n.get("key_npc")]
+    if keyed:
+        return keyed[0]
+    return present[0]
+
+
+def try_acquire_item(action, player, area, tick, skill_success=True):
+    """
+    If action searches for or takes an item, add it to inventory before narration.
+    Returns (directive_text or None, item_dict or None).
+    """
+    if not _ACQUIRE_VERBS.search(action or ""):
+        return None, None
+    if re.search(r"\b(find someone|find work|find a person)\b", action, re.I):
+        return None, None
+
+    matched = None
+    for pattern, category, item_type, template in _ITEM_KEYWORDS:
+        if pattern.search(action):
+            matched = (category, item_type, template)
+            break
+    if not matched:
+        if re.search(r"\b(find|search|look for|take|grab|pick up)\b", action, re.I):
+            matched = ("weapon", "sword", "notched blade")
+        else:
+            return None, None
+
+    category, item_type, template = matched
+    source = "wilderness"
+    if area and area.get("type") == "district":
+        if area.get("city"):
+            source = "merchant"
+        if "docks" in (area.get("id") or ""):
+            source = "bandit"
+
+    kwargs = {"category": category, "source": source, "created_tick": tick}
+    if template:
+        kwargs["template_name"] = template
+    _iid, item = generate_item(**kwargs)
+    item["owner"] = "player"
+
+    if not skill_success:
+        return (
+            "The search fails — nothing useful in reach, or someone notices you looking.",
+            None,
+        )
+
+    summary = resolve_loot_to_player(player, [item])
+    ensure_equipment(player)
+    if category == "weapon" and not player.get("equipment", {}).get("weapon"):
+        equip_item(player, item["id"])
+
+    directive = (
+        f"MECHANICAL FACT: {summary} "
+        f"The protagonist NOW HAS this in inventory — describe picking it up once, "
+        f"do not invent a different item."
+    )
+    action_ctx_item = {
+        "id": item["id"],
+        "name": item["name"],
+        "category": item.get("category"),
+        "rarity": item.get("rarity"),
+    }
+    player.setdefault("last_acquired_item", action_ctx_item)
+    return directive, item
+
+
+def resolve_find_person(action, player, present, npcs):
+    """Target for find/talk to described person."""
+    if action and present:
+        for pattern, matcher in _DESC_HINTS:
+            if pattern.search(action):
+                hits = []
+                for n in present:
+                    try:
+                        if matcher(n):
+                            hits.append(n)
+                    except Exception:
+                        continue
+                if len(hits) == 1:
+                    return hits[0]
+                if len(hits) > 1:
+                    return hits[0]
+                return None
+
+    named = find_npc_by_name_in_text(action, npcs, player)
+    if named:
+        for n in present:
+            if n["id"] == named["id"]:
+                return named
+    pron = resolve_pronoun_target(action, player, present)
+    if pron:
+        return pron
+    focus = player.get("scene_focus")
+    if focus:
+        for n in present:
+            if n["id"] == focus:
+                return n
+    return match_npc_by_description(action, present)
+
+
+def build_find_facts(target):
+    """Lock narrator to the person the simulation actually matched."""
+    if not target:
+        return ""
+    desc = short_descriptor(target)
+    role = target.get("role", "stranger")
+    g_label = gender_label(target)
+    name = target.get("name") or desc
+    return (
+        "SCENE FACTS — FIND PERSON (obey exactly):\n"
+        f"- Target found: {name}, {g_label}, role={role}.\n"
+        f"- ONLY this person is the match — describe them with role={role}.\n"
+        "- Dock guards, watchmen, patrols may appear in background but are NOT this person.\n"
+    )
+
+
+def resolve_confession_respondent(player, present, action_ctx, npcs, relationships):
+    """
+    Who responds to 'I killed him' — witness, focus, or nearest guard — not random blacksmith.
+    """
+    tid = action_ctx.get("target_id")
+    if tid:
+        for n in present:
+            if n["id"] == tid:
+                return n
+
+    witnesses = player.get("combat_witnesses") or []
+    for wid in witnesses:
+        for n in present:
+            if n["id"] == wid and n.get("status") == "alive":
+                return n
+
+    focus = player.get("scene_focus")
+    for n in present:
+        if n["id"] == focus:
+            return n
+
+    guards = [n for n in present if n.get("role") in ("guard", "soldier")]
+    if guards:
+        return guards[0]
+
+    if len(present) == 1:
+        return present[0]
+    return None
+
+
+def _forbidden_role_labels(role):
+    labels = [r for r in (
+        "guard", "watchman", "soldier", "sailor", "priest", "scholar",
+        "blacksmith", "merchant", "hunter", "dockhand",
+    ) if r != role]
+    return ", ".join(labels[:8])
+
+
+def build_combat_facts(target, result, target_kind, npcs):
+    """Structured facts for narrator — identity locked to simulation target."""
+    if not target:
+        return ""
+    if target_kind == "monster":
+        label = target.get("species", "creature")
+        fatal = result.get("fatal", False)
+        return (
+            f"SCENE FACTS — COMBAT (obey exactly):\n"
+            f"- Opponent: {label} (monster, not a person).\n"
+            f"- Outcome: {'FATAL — creature slain.' if fatal else 'Fight ended — both may still stand.'}\n"
+            f"- Do NOT describe a priest, scholar, or dockworker unless they match this target.\n"
+        )
+
+    desc = short_descriptor(target)
+    g_label = gender_label(target)
+    role = target.get("role", "stranger")
+    pron = target.get("pronouns", {})
+    fatal = result.get("fatal", False)
+    alive = target.get("status") == "alive" and not fatal
+    name = target.get("name") if target.get("name") else desc
+
+    lines = [
+        "SCENE FACTS — COMBAT (obey exactly):",
+        f"- Opponent: {desc}, {g_label}, role={role}, age ~{target.get('age', '?')}.",
+        f"- Pronouns ONLY: {pron.get('subject')}/{pron.get('object')}/{pron.get('possessive')}.",
+        f"- Appearance (fixed): {appearance_notes(target, 'face')[:100]}.",
+        f"- Role lock: opponent is a {role} — never call them {_forbidden_role_labels(role)}.",
+    ]
+    if fatal:
+        lines.append(f"- Outcome: FATAL — {name} is DEAD. Body may be described; they do NOT speak.")
+        lines.append("- No other NPC may pretend to be this person. No priest/scholar swap.")
+    else:
+        lines.append(
+            f"- Outcome: NOT FATAL — {name} is alive (health {target['stats'].get('health', '?')}). "
+            "They may speak briefly if focal — same person, same voice."
+        )
+    lines.append("- ONLY this opponent was in the fight. Do not invent a different combatant.")
+    return "\n".join(lines)
+
+
+def build_inventory_facts(player, action_ctx):
+    """Tell narrator what the player actually carries after this beat."""
+    acquired = action_ctx.get("acquired_item") or player.get("last_acquired_item")
+    if not acquired:
+        return ""
+    eq = player.get("equipment") or {}
+    weapon = eq.get("weapon")
+    wname = ""
+    if weapon:
+        for it in player.get("inventory") or []:
+            if isinstance(it, dict) and it.get("id") == weapon:
+                wname = it.get("name", "")
+                break
+    parts = [
+        "SCENE FACTS — INVENTORY (obey exactly):",
+        f"- Just acquired: {acquired.get('name')} [{acquired.get('rarity', 'common')}].",
+    ]
+    if wname:
+        parts.append(f"- Equipped weapon: {wname}.")
+    parts.append("- Do NOT describe finding a different weapon than listed.")
+    return "\n".join(parts)
+
+
+def build_post_combat_facts(player, npcs):
+    """Remind narrator of combat outcome on later beats (search, confess)."""
+    fatal = player.get("last_combat_fatal", False)
+    tid = player.get("last_combat_target")
+    victim = npcs.get(tid, {}) if tid else {}
+    v_label = victim.get("name") or short_descriptor(victim) if victim else "the last opponent"
+    v_role = victim.get("role", "stranger")
+    v_gender = gender_label(victim) if victim else ""
+    alive = victim.get("status") == "alive" and not fatal
+    lines = ["SCENE FACTS — PRIOR COMBAT (obey exactly):"]
+    if victim:
+        lines.append(
+            f"- Last opponent: {v_label}, {v_gender}, role={v_role}. "
+            f"Role lock: {v_role} only — not {_forbidden_role_labels(v_role)}."
+        )
+    if fatal or victim.get("status") == "dead":
+        lines.append(f"- {v_label} was killed in the last fight. A body may exist — they do NOT speak.")
+    elif alive:
+        hp = victim.get("stats", {}).get("health", "?")
+        lines.append(
+            f"- {v_label} is STILL ALIVE (health {hp}). "
+            "Do NOT write a corpse, execution, or confirmed murder. "
+            "Injuries and exhaustion only."
+        )
+    else:
+        lines.append("- Last fight was non-lethal. No confirmed death.")
+    return "\n".join(lines)
+
+
+def build_confession_facts(player, respondent, victim_id, npcs):
+    victim = npcs.get(victim_id, {}) if victim_id else {}
+    v_label = victim.get("name") or short_descriptor(victim) if victim else "the one you fought"
+    fatal = player.get("last_combat_fatal", False) or victim.get("status") == "dead"
+    if not respondent:
+        return (
+            "SCENE FACTS — CONFESSION:\n"
+            f"- Protagonist claims they killed {v_label}.\n"
+            + (f"- Truth: {v_label} is DEAD.\n" if fatal else f"- Truth: {v_label} is still ALIVE.\n")
+            + "- No one suitable is close enough to answer — show silence, distance, or overheard murmurs only.\n"
+            "- Do NOT invent a new character to respond."
+        )
+    r_desc = short_descriptor(respondent)
+    r_role = respondent.get("role", "stranger")
+    r_gender = gender_label(respondent)
+    if respondent.get("id") == victim_id and not fatal:
+        return (
+            "SCENE FACTS — CONFESSION (obey exactly):\n"
+            f"- Protagonist claims to have killed {v_label}.\n"
+            f"- Truth: {v_label} is the person speaking TO — they are STILL ALIVE and present.\n"
+            f"- ONLY {r_desc} ({r_role}, {r_gender}) responds — disbelief, anger, or dark humor. "
+            "One to three lines. No corpse. No 'scholar' unless role=scholar.\n"
+        )
+    v_role = victim.get("role", "stranger")
+    rel_note = "They witnessed the violence." if respondent.get("id") in (player.get("combat_witnesses") or []) else "They did not witness it directly."
+    if fatal:
+        truth = f"- Truth: {v_label} IS dead (role={v_role}). Victim may be named in third person."
+    else:
+        truth = (
+            f"- Truth: {v_label} is STILL ALIVE — the confession is false, premature, or delusion. "
+            f"Respondent must NOT agree they are dead; show disbelief, fear, or 'look — {v_label.split()[0] if v_label else 'they'} is right there'."
+        )
+    return (
+        f"SCENE FACTS — CONFESSION (obey exactly):\n"
+        f"- Protagonist says they killed {v_label} (role={v_role}).\n"
+        f"{truth}\n"
+        f"- ONLY {r_desc} may speak — role={r_role}, {r_gender}. "
+        f"Do NOT call the RESPONDENT {_forbidden_role_labels(r_role)}.\n"
+        f"- {rel_note} One to three lines of reply, then stop.\n"
+        f"- Do NOT swap in a new face or gender."
+    )

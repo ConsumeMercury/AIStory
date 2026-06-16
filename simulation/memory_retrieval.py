@@ -16,7 +16,7 @@ def get_relevant_memories(memories, query, limit=20):
 
         text = " ".join(
             str(memory.get(field, ""))
-            for field in ("action", "type", "actor", "location")
+            for field in ("action", "type", "actor", "location", "target")
         ).lower()
 
         score = memory.get("importance", 0)

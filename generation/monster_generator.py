@@ -15,7 +15,38 @@ BESTIARY = {
     "ghoul":       {"hp": (40, 60),  "atk": (11, 18), "def": (4, 8),  "spd": (9, 13),  "temperament": "relentless", "habitat": ["ruins", "crypt"]},
     "dire_boar":   {"hp": (70, 100), "atk": (14, 22), "def": (7, 11), "spd": (8, 12),  "temperament": "territorial", "habitat": ["forest", "wilderness"]},
     "wraith":      {"hp": (35, 55),  "atk": (16, 26), "def": (3, 6),  "spd": (12, 16), "temperament": "haunting", "habitat": ["crypt", "ruins"]},
+    "bone_stalker": {"hp": (50, 72), "atk": (13, 19), "def": (5, 9),  "spd": (11, 15), "temperament": "ambush", "habitat": ["crypt", "ruins", "marsh"]},
+    "marsh_adder":  {"hp": (22, 34),  "atk": (9, 15),  "def": (2, 4),  "spd": (15, 19), "temperament": "ambush", "habitat": ["marsh", "wilderness"]},
 }
+
+SPECIES_DISPLAY = {
+    "wolf": "grey wolf",
+    "bandit": "road bandit",
+    "bog_lurker": "bog lurker",
+    "ghoul": "ghoul",
+    "dire_boar": "dire boar",
+    "wraith": "wraith",
+    "bone_stalker": "bone stalker",
+    "marsh_adder": "marsh adder",
+}
+
+SPECIES_BOUNTY = {
+    "wolf": 8,
+    "bandit": 15,
+    "bog_lurker": 22,
+    "ghoul": 18,
+    "dire_boar": 28,
+    "wraith": 35,
+    "bone_stalker": 30,
+    "marsh_adder": 12,
+}
+
+
+def roll_loot(species):
+    """Backward-compatible wrapper — prefer simulation.item_engine.roll_monster_loot."""
+    from simulation.item_engine import roll_monster_loot
+    return roll_monster_loot(species)
+
 
 _DESCRIPTORS = {
     "wolf": "a lean grey shape, ribs showing, eyes catching the light",
@@ -24,6 +55,8 @@ _DESCRIPTORS = {
     "ghoul": "a grey, hairless thing that used to be a person",
     "dire_boar": "a tusked bulk the size of a cart, breath steaming",
     "wraith": "a cold smear of a shape that the eye keeps sliding off",
+    "bone_stalker": "a long-limbed thing of bone and sinew that hunts where the dead gather",
+    "marsh_adder": "a striped coil half-submerged, still as a root until it isn't",
 }
 
 

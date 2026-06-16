@@ -7,6 +7,7 @@ the wilds stay dangerous without flooding.
 import random
 from storage import load, save
 from generation.monster_generator import spawn_for_area
+from simulation.hunting_engine import refresh_bounty_board
 
 MON_FILE = "characters/monsters.json"
 AREAS_FILE = "world/areas.json"
@@ -29,5 +30,8 @@ def maintain_monsters():
             mon["location"] = area["id"]
             mon["area"] = area["id"]
             monsters[mon["id"]] = mon
+
+    if random.random() < 0.35:
+        refresh_bounty_board(world=load("world/world_state.json", {}), monsters=monsters, areas=areas)
 
     save(MON_FILE, monsters)

@@ -1,9 +1,6 @@
 """
-Assemble a full, unique NPC:
-  identity (locked gender + pronouns), physique, age, role,
-  20-trait personality, generated background (origin/wound/secret/mannerism),
-  role-weighted skills (with xp/levels), combat stats,
-  derived goals/fears (soft, from traits), and bookkeeping fields.
+Assemble a full, unique NPC with correlated age, role, physique, background,
+persona, skills, stats, and behaviour profile.
 """
 
 import random
@@ -16,14 +13,20 @@ from generation.stats_generator import generate_stats
 from generation.descriptor_generator import generate_physique, lock_pronouns
 from generation.background_generator import generate_background
 from generation.persona_generator import generate_persona
-from generation.item_generator import generate_item
+from simulation.item_engine import roll_npc_inventory_item
 
 OCCUPATIONS = list(ROLE_SKILLS.keys())
 
+_ROLE_AGE = {
+    "scholar": (22, 65), "scribe": (20, 60), "priest": (25, 70),
+    "soldier": (19, 50), "mercenary": (20, 55), "guard": (21, 58),
+    "merchant": (25, 68), "innkeeper": (28, 70), "blacksmith": (22, 62),
+    "herbalist": (24, 68), "apothecary": (26, 65), "hunter": (18, 55),
+    "farmer": (20, 70), "sailor": (18, 58), "thief": (17, 45),
+}
 
-def _derive_goals(traits):
-    """Soft goals from the strongest tendencies. Not forced — many NPCs
-    just want to get by."""
+
+def _derive_goals(traits, background):
     goals = []
     if traits.get("greed", 0) > 70:
         goals.append("accumulate wealth")
@@ -35,58 +38,82 @@ def _derive_goals(traits):
         goals.append("settle an old score")
     if traits.get("curiosity", 0) > 75:
         goals.append("uncover a secret")
-    return goals or ["get through the week"]
+    if background.get("hope"):
+        goals.append(background["hope"])
+    return list(dict.fromkeys(goals)) or ["get through the week"]
 
 
-def _derive_fears(traits):
+def _derive_fears(traits, background):
+    fears = []
     if traits.get("paranoia", 0) > 65:
-        return ["being watched", "betrayal"]
+        fears.extend(["being watched", "betrayal"])
     if traits.get("courage", 50) < 30:
-        return ["violence", "ruin"]
+        fears.extend(["violence", "ruin"])
     if traits.get("pride", 0) > 70:
-        return ["public humiliation"]
-    return ["an ordinary, forgotten death"]
+        fears.append("public humiliation")
+    if "betrayed" in background.get("formative_event", ""):
+        fears.append("trusting the wrong person again")
+    return fears or ["an ordinary, forgotten death"]
+
+
+def _behavior_profile(traits):
+    """Unique action biases for simulation — normalized weights, not identical NPCs."""
+    t = traits
+    return {
+        "social": t.get("gregariousness", 50) + t.get("humor", 50) * 0.5,
+        "caution": t.get("paranoia", 50) + (100 - t.get("courage", 50)) * 0.4,
+        "work": t.get("discipline", 50) + t.get("ambition", 50) * 0.3,
+        "risk": t.get("courage", 50) + t.get("impulsiveness", 50) * 0.5,
+        "kindness": t.get("kindness", 50) + t.get("generosity", 50) * 0.4,
+    }
 
 
 def generate_npc(npc_id, locations=None):
     gender = random.choice(["male", "female"])
-    age = random.randint(17, 68)
     role = random.choice(OCCUPATIONS)
+    lo, hi = _ROLE_AGE.get(role, (17, 68))
+    age = random.randint(lo, hi)
     traits = generate_traits()
+    background = generate_background(role, traits)
 
     npc = {
         "id": npc_id,
         "name": generate_name(),
         "gender": gender,
-        "pronouns": lock_pronouns(gender),     # LOCKED — narrator must obey
+        "pronouns": lock_pronouns(gender),
         "age": age,
         "role": role,
-        "occupation": role,                    # back-compat alias
+        "occupation": role,
         "location": random.choice(locations) if locations else None,
 
-        "physique": generate_physique(age),
-        "background": generate_background(role, traits),
-        "persona": generate_persona(traits),
+        "physique": generate_physique(age, role=role, gender=gender),
+        "background": background,
+        "persona": generate_persona(traits, role=role),
         "traits": traits,
         "skills": generate_npc_skills(role),
         "stats": generate_stats(age, role, traits),
         "level": 1,
         "xp": 0,
 
-        "goals": _derive_goals(traits),
-        "fears": _derive_fears(traits),
+        "goals": _derive_goals(traits, background),
+        "fears": _derive_fears(traits, background),
         "goals_progress": {},
+        "behavior_profile": _behavior_profile(traits),
 
         "relationships": {},
-        "inventory": [it for _, it in (generate_item() for _ in range(random.randint(0, 2)))],
+        "inventory": [
+            roll_npc_inventory_item(role)
+            for _ in range(random.randint(0, 2))
+            if random.random() < 0.7
+        ],
         "wealth": random.randint(0, 120),
         "status": "alive",
         "last_action": None,
-        "known_by_player": False,    # mirror flag; player.json is source of truth
-        "culture": None,             # set by family_generator
+        "known_by_player": False,
+        "culture": None,
         "surname": None,
         "family": {"surname": None, "relations": {}},
-        "institution": None,         # set by institution_generator
+        "institution": None,
     }
     return npc
 

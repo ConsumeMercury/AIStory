@@ -1,65 +1,122 @@
 """
-Stat-based combat shared by NPCs, monsters, and the player.
-
-resolve_combat(a, b) runs a short, deterministic-ish exchange:
-  damage = max(1, attacker.attack + skill_bonus + roll - defender.defense)
-  initiative by speed; stamina drains; whoever hits 0 health dies.
-
-Everyone uses the same {"stats": {...}} shape, so the engine doesn't care
-whether a combatant is a person or a bog-lurker. Health/stamina are
-written back onto the passed-in dicts, so callers persist the mutation.
+Stat-based combat with failure consequences: injuries, exhaustion, disarm, flee.
 """
 
 import random
+
 from simulation.progression_engine import skill_level, add_skill_xp
 
-# which skill helps with attacking, picked from what the entity actually has
 _WEAPON_SKILLS = ["swordsmanship", "knife_fighting", "brawling", "archery"]
+
+_INJURIES = [
+    "split lip", "cracked ribs", "sprained wrist", "deep bruising",
+    "staggered knee", "wind knocked out",
+]
 
 
 def _attack_bonus(entity):
     best = 0
     for s in _WEAPON_SKILLS:
         best = max(best, skill_level(entity, s))
-    return best * 2  # each skill level ~ +2 damage
+    return best * 2
 
 
 def _alive(entity):
     return entity.get("stats", {}).get("health", 0) > 0 and entity.get("status") != "dead"
 
 
+def _combat_stats(entity):
+    if entity.get("journal") is not None:
+        from simulation.item_engine import apply_equipment_to_entity
+        return apply_equipment_to_entity(entity)
+    return entity.get("stats") or {}
+
+
 def _strike(attacker, defender):
-    atk = attacker["stats"]["attack"] + _attack_bonus(attacker)
-    dfn = defender["stats"].get("defense", 0)
+    a_stats = _combat_stats(attacker)
+    d_stats = _combat_stats(defender)
+    atk = a_stats.get("attack", 0) + _attack_bonus(attacker)
+    dfn = d_stats.get("defense", 0)
     roll = random.randint(-3, 6)
     dmg = max(1, atk + roll - dfn)
     defender["stats"]["health"] = max(0, defender["stats"]["health"] - dmg)
-    attacker["stats"]["stamina"] = max(0, attacker["stats"].get("stamina", 0) - 3)
+    attacker["stats"]["stamina"] = max(0, attacker.get("stats", {}).get("stamina", 0) - 3)
+    defender["stats"]["stamina"] = max(0, defender.get("stats", {}).get("stamina", 0) - 2)
     return dmg
 
 
+def _apply_injury(entity, severe=False):
+    injuries = entity.setdefault("injuries", [])
+    count = 2 if severe else 1
+    for _ in range(count):
+        inj = random.choice(_INJURIES)
+        if inj not in injuries:
+            injuries.append(inj)
+    entity["stats"]["stress"] = min(
+        entity["stats"].get("max_stress", 100),
+        entity["stats"].get("stress", 0) + random.randint(5, 15),
+    )
+    if severe:
+        entity["stats"]["speed"] = max(1, entity["stats"].get("speed", 5) - random.randint(1, 3))
+
+
+def _temperament_setup(a, b):
+    """Monster temperament nudges combat before rounds begin."""
+    notes = []
+    for entity, other in ((a, b), (b, a)):
+        if entity.get("journal") is not None:
+            continue
+        temp = entity.get("temperament")
+        if temp == "ambush" and entity["stats"].get("speed", 0) >= other["stats"].get("speed", 0):
+            entity["_ambush"] = True
+            notes.append("ambush")
+        elif temp == "territorial":
+            entity["stats"]["defense"] = entity["stats"].get("defense", 0) + 2
+            notes.append("territorial")
+        elif temp == "pack":
+            entity["stats"]["speed"] = entity["stats"].get("speed", 0) + 1
+        elif temp == "haunting" and other.get("journal") is not None:
+            other["stats"]["stress"] = min(
+                other["stats"].get("max_stress", 100),
+                other["stats"].get("stress", 0) + 6,
+            )
+            notes.append("haunting")
+        elif temp == "relentless":
+            entity["stats"]["stamina"] = min(
+                entity["stats"].get("max_stamina", 30),
+                entity["stats"].get("stamina", 0) + 6,
+            )
+    return notes
+
+
 def resolve_combat(a, b, max_rounds=12):
-    """
-    Returns a result dict describing the fight, with health written back.
-    Does NOT log or save — the caller decides that (so combat can be used
-    inside the sim loop or for the player).
-    """
     log = []
-    # initiative
+    _temperament_setup(a, b)
     first, second = (a, b) if a["stats"].get("speed", 0) >= b["stats"].get("speed", 0) else (b, a)
 
     rounds = 0
+    falter_a = falter_b = 0
     while _alive(a) and _alive(b) and rounds < max_rounds:
         rounds += 1
         for attacker, defender in ((first, second), (second, first)):
             if not (_alive(attacker) and _alive(defender)):
                 continue
-            # exhaustion makes you sloppy
-            if attacker["stats"].get("stamina", 1) <= 0 and random.random() < 0.4:
-                log.append((attacker.get("id"), "falters", 0))
-                continue
+            stam = attacker["stats"].get("stamina", 1)
+            if stam <= 0:
+                if random.random() < 0.5:
+                    log.append((attacker.get("id"), "falters", 0))
+                    if attacker is a:
+                        falter_a += 1
+                    else:
+                        falter_b += 1
+                    continue
             dmg = _strike(attacker, defender)
+            if attacker.get("_ambush") and rounds == 1:
+                dmg += random.randint(2, 5)
+                attacker["_ambush"] = False
             log.append((attacker.get("id"), defender.get("id"), dmg))
+            if dmg >= 8 and random.random() < 0.25:
+                _apply_injury(defender, severe=False)
 
     a_dead = not _alive(a)
     b_dead = not _alive(b)
@@ -68,25 +125,49 @@ def resolve_combat(a, b, max_rounds=12):
     elif b_dead and not a_dead:
         winner, loser = a, b
     else:
-        winner, loser = None, None  # both standing (or both down): a draw/break
+        winner, loser = None, None
 
-    # award combat skill xp to survivors who landed hits
+    consequences = []
+    for who, falters, tag in ((a, falter_a, "a"), (b, falter_b, "b")):
+        if not _alive(who):
+            continue
+        if who["stats"].get("stamina", 0) <= 0:
+            consequences.append(f"{tag}: exhausted — vulnerable")
+            _apply_injury(who, severe=random.random() < 0.3)
+        if falters >= 2:
+            consequences.append(f"{tag}: overwhelmed — may flee or surrender")
+
+    if winner is None and rounds >= max_rounds:
+        consequences.append("draw — both standing, separated bruised and breathing hard")
+        _apply_injury(a, severe=random.random() < 0.4)
+        _apply_injury(b, severe=random.random() < 0.4)
+
     for who in (a, b):
         if _alive(who):
             for s in _WEAPON_SKILLS:
                 if s in who.get("skills", {}):
-                    add_skill_xp(who, s, 8)
+                    add_skill_xp(who, s, 8 if winner is who else 3)
                     break
 
     if winner is not None:
         winner["xp"] = winner.get("xp", 0) + 20
         if loser["stats"]["health"] <= 0:
             loser["status"] = "dead"
+            consequences.append("fatal blow landed")
+        else:
+            _apply_injury(loser, severe=True)
+            consequences.append("loser hurt badly but alive")
+
+    player_entity = a if "journal" in a else b if "journal" in b else None
 
     return {
-        "rounds": rounds, "log": log,
+        "rounds": rounds,
+        "log": log,
         "winner": winner.get("id") if winner else None,
         "loser": loser.get("id") if loser else None,
-        "a_health": a["stats"]["health"], "b_health": b["stats"]["health"],
-        "fatal": bool(winner and loser["stats"]["health"] <= 0),
+        "a_health": a["stats"]["health"],
+        "b_health": b["stats"]["health"],
+        "fatal": bool(winner and loser and loser["stats"]["health"] <= 0),
+        "consequences": consequences,
+        "player_injuries": (player_entity.get("injuries") or []) if player_entity else [],
     }
