@@ -215,12 +215,18 @@ function renderTurnDebug(debug) {
 
   if (debug.generation_settings) {
     const g = debug.generation_settings;
+    const penaltyNote =
+      g.frequency_penalty_requested != null && g.frequency_penalty == null
+        ? `<div class="delta-prose-issue">Frequency penalty requested ${esc(g.frequency_penalty_requested)} (not sent on ${esc(g.model_family || "?")} models)</div>`
+        : "";
     sections.push(`
       <div class="delta-section delta-prose-debug">
         <div class="delta-section-label">Generation</div>
         <div class="delta-prose-issue">Kind: ${esc(g.kind || "—")}</div>
+        <div class="delta-prose-issue">Model family: ${esc(g.model_family || "—")}</div>
         <div class="delta-prose-issue">Temperature: ${esc(g.temperature ?? "—")}</div>
         <div class="delta-prose-issue">Frequency penalty: ${esc(g.frequency_penalty ?? "—")}</div>
+        ${penaltyNote}
       </div>`);
   }
 

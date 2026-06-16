@@ -58,17 +58,55 @@ def _thinking_config(model):
     return types.ThinkingConfig(thinking_level="minimal")
 
 
+def model_family(model):
+    """Coarse model series for sampling-parameter gating."""
+    m = (model or "").lower()
+    if "2.0" in m:
+        return "2.0"
+    if "2.5" in m:
+        return "2.5"
+    if "3." in m or m.startswith("gemini-3"):
+        return "3"
+    return "unknown"
+
+
+def effective_sampling_params(model, *, temperature=None, top_p=None, frequency_penalty=None):
+    """
+    Return sampling kwargs actually sent for this model.
+
+    frequency_penalty is only honored on gemini-2.0-* (2.5+ and 3.x reject it).
+    temperature/top_p are sent on all known families so kind maps apply on 3.x;
+    Google recommends defaults on 3.x but accepts the fields.
+    """
+    family = model_family(model)
+    out = {
+        "model_family": family,
+        "temperature": temperature,
+        "top_p": top_p,
+        "frequency_penalty": None,
+    }
+    if family == "2.0" and frequency_penalty is not None and frequency_penalty > 0:
+        out["frequency_penalty"] = frequency_penalty
+    return out
+
+
 def _generation_config(model, *, max_tokens, temperature=None, top_p=None, frequency_penalty=None):
     kwargs = {
         "max_output_tokens": max_tokens,
         "thinking_config": _thinking_config(model),
     }
-    if temperature is not None:
-        kwargs["temperature"] = temperature
-    if top_p is not None:
-        kwargs["top_p"] = top_p
-    if frequency_penalty is not None and frequency_penalty > 0:
-        kwargs["frequency_penalty"] = frequency_penalty
+    sampling = effective_sampling_params(
+        model,
+        temperature=temperature,
+        top_p=top_p,
+        frequency_penalty=frequency_penalty,
+    )
+    if sampling["temperature"] is not None:
+        kwargs["temperature"] = sampling["temperature"]
+    if sampling["top_p"] is not None:
+        kwargs["top_p"] = sampling["top_p"]
+    if sampling["frequency_penalty"] is not None:
+        kwargs["frequency_penalty"] = sampling["frequency_penalty"]
     return types.GenerateContentConfig(**kwargs)
 
 

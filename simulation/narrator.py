@@ -399,6 +399,14 @@ def generate_scene(player_action, world, player, present_npcs,
     kind = (action_context or {}).get("kind", "general")
     gen_temp = temperature_for_kind(kind)
     gen_penalty = frequency_penalty_for_kind(kind)
+    from simulation.gemini_client import effective_sampling_params, model_name
+
+    effective = effective_sampling_params(
+        model_name(),
+        temperature=gen_temp,
+        top_p=0.9,
+        frequency_penalty=gen_penalty,
+    )
     gen_kwargs = dict(
         max_tokens=token_budget,
         temperature=gen_temp,
@@ -408,9 +416,12 @@ def generate_scene(player_action, world, player, present_npcs,
     if action_context is not None:
         action_context["memory_debug"] = _memory_debug
         action_context["generation_settings"] = {
-            "temperature": gen_temp,
-            "frequency_penalty": gen_penalty,
             "kind": kind,
+            "temperature": effective["temperature"],
+            "top_p": effective["top_p"],
+            "frequency_penalty": effective["frequency_penalty"],
+            "frequency_penalty_requested": gen_penalty if gen_penalty > 0 else None,
+            "model_family": effective["model_family"],
         }
     if on_prose_chunk:
         return generate_text_stream(prompt, on_chunk=on_prose_chunk, **gen_kwargs)

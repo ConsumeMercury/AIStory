@@ -1,5 +1,6 @@
 """Generation settings and narrative continuity."""
 
+from simulation.gemini_client import effective_sampling_params, model_family
 from simulation.novel_craft import (
     TEMPERATURE_BY_KIND,
     frequency_penalty_for_kind,
@@ -22,6 +23,24 @@ def test_temperature_lower_for_fact_sensitive_beats():
 def test_frequency_penalty_higher_for_atmosphere_beats():
     assert frequency_penalty_for_kind("explore") > frequency_penalty_for_kind("attack")
     assert frequency_penalty_for_kind("ask_name") < frequency_penalty_for_kind("talk")
+
+
+def test_model_family_detection():
+    assert model_family("gemini-3.5-flash") == "3"
+    assert model_family("gemini-2.5-flash") == "2.5"
+    assert model_family("gemini-2.0-flash") == "2.0"
+
+
+def test_frequency_penalty_gated_off_25_and_3():
+    for model in ("gemini-3.5-flash", "gemini-2.5-flash", "gemini-3-flash-preview"):
+        eff = effective_sampling_params(model, temperature=0.8, top_p=0.9, frequency_penalty=0.35)
+        assert eff["temperature"] == 0.8
+        assert eff["frequency_penalty"] is None
+
+
+def test_frequency_penalty_sent_on_20():
+    eff = effective_sampling_params("gemini-2.0-flash", temperature=0.8, frequency_penalty=0.35)
+    assert eff["frequency_penalty"] == 0.35
 
 
 def test_extract_dialogue_lines_skips_player_speech():
