@@ -17,6 +17,8 @@ GUARDRAIL_RULES = (
     "CAST: NO FOCAL CHARACTER means no new named strangers with speeches.",
     "IDENTITY: Same NPC — same gender, role, and persona register every beat.",
     "PLAYER: Quote protagonist speech exactly once when given; never invent their lines.",
+    "TIME: Do not promise specific bell tolls, auctions, or timed meetings unless SCHEDULED EVENTS lists them.",
+    "WAIT: wait until/for targets advance simulation time — do not narrate time passing if WAIT REFUSED.",
     "WITHDRAW: End exchange; clear focus after — do not continue old thread next beat unless player re-engages.",
     "TARGET: Role hints pick a matching NPC; keep scene_focus when that NPC fits the hint.",
     "MISNAME: If the player uses the wrong name, the focal NPC corrects them — do not invent a third person.",
@@ -117,6 +119,15 @@ def build_hard_constraints_block(focal_npc_id, focal_npc, scene_place, action_co
         lines.append(
             "- ACCUSE REFUSED — no case verdict, no guilt confirmed. "
             "Resolve this beat only; do NOT continue prior accusation threads."
+        )
+    if ctx.get("wait_no_change"):
+        lines.append(
+            "- WAIT REFUSED — no time passed. Do NOT narrate dawn, bell tolls, or events firing. "
+            "Do NOT repeat the prior NPC line verbatim."
+        )
+    if ctx.get("relocated"):
+        lines.append(
+            "- RELOCATION — prior conversation partner does NOT follow into this sub-place."
         )
     if focal_npc_id and focal_npc:
         known_name = focal_npc.get("name")

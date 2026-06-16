@@ -72,7 +72,13 @@ from simulation.district_state import district_narrator_block
 from simulation.institution_politics import politics_narrator_block
 from generation.world_history import history_block
 from generation.location_generator import city_check_modifier
-from simulation.world_clock import advance_for_action
+from simulation.world_clock import advance_for_action, advance_clock, resolve_wait_advance
+from simulation.scheduled_events import (
+    record_scheduled_events,
+    fire_due_events,
+    event_fired_directive,
+    build_scheduled_events_block,
+)
 from simulation import simulation_runner
 from simulation.action_resolution import (
     resolve_combat_target,
@@ -486,7 +492,40 @@ def process_player_action(action, *, on_prose_chunk=None):
 
     with state_lock():
         world = load(WORLD_FILE, {})
-        advance_for_action(kind)
+        if kind == "wait":
+            wait_info = resolve_wait_advance(action, world, player, player.get("area"))
+            if wait_info.get("refused"):
+                action_ctx["wait_no_change"] = True
+                action_ctx["story_directive"] = (
+                    action_ctx.get("story_directive", "")
+                    + " "
+                    + wait_info.get("refusal_message", "WAIT REFUSED — no time passes.")
+                ).strip()
+            else:
+                hours = wait_info.get("hours") or 0
+                if hours > 0:
+                    world = advance_clock(hours)
+                action_ctx["wait_hours"] = hours
+                if wait_info.get("target_label"):
+                    action_ctx["wait_target"] = wait_info["target_label"]
+                if wait_info.get("event"):
+                    action_ctx["wait_event"] = wait_info["event"].get("id")
+                fired = fire_due_events(player, world, player.get("area"))
+                if fired:
+                    action_ctx["events_fired"] = fired
+                    action_ctx["story_directive"] = (
+                        action_ctx.get("story_directive", "")
+                        + " "
+                        + event_fired_directive(fired)
+                    ).strip()
+                elif hours > 0 and wait_info.get("target_label"):
+                    action_ctx["story_directive"] = (
+                        action_ctx.get("story_directive", "")
+                        + f" TIME PASSED: {hours} hour(s) — now {world.get('time_of_day', '?')}."
+                    ).strip()
+                save(PLAYER_FILE, player)
+        else:
+            advance_for_action(kind)
         world = load(WORLD_FILE, {})
         save(WORLD_FILE, world)
 
@@ -610,6 +649,14 @@ def process_player_action(action, *, on_prose_chunk=None):
         sub, local_msg = resolve_local_movement(action, player, player.get("area"))
         if sub:
             extra_directive = local_msg
+            player["scene_focus"] = None
+            action_ctx["target_id"] = None
+            action_ctx["relocated"] = True
+            action_ctx["story_directive"] = (
+                action_ctx.get("story_directive", "")
+                + " RELOCATION — prior focal NPC does NOT follow into this sub-place. "
+                "They remain behind unless SCENE FACTS list them present here."
+            ).strip()
             with state_lock():
                 save(PLAYER_FILE, player)
         else:
@@ -1057,6 +1104,9 @@ def process_player_action(action, *, on_prose_chunk=None):
     hard_constraints = build_hard_constraints_block(
         focal_id, focal_npc, scene_place, action_ctx, present=present,
     )
+    sched_block = build_scheduled_events_block(player, player.get("area"), world)
+    if sched_block:
+        hard_constraints = (hard_constraints + "\n" + sched_block).strip()
 
     with state_lock():
         player = load(PLAYER_FILE, {})
@@ -1115,6 +1165,9 @@ def process_player_action(action, *, on_prose_chunk=None):
                 save(PLAYER_FILE, player)
         if scene:
             if record_narrator_places(player, scene, player.get("area")):
+                save(PLAYER_FILE, player)
+            world = load(WORLD_FILE, {})
+            if record_scheduled_events(player, scene, player.get("area"), world):
                 save(PLAYER_FILE, player)
         if kind == "investigate":
             focus_npc = None

@@ -52,9 +52,14 @@ _NAV_DEST = re.compile(
 )
 
 _BY_AT_DEST = re.compile(
-    r"\b(?:by|at|toward|towards|into|to|near|down by|up at)\s+(?:the\s+)?"
+    r"\b(?:by|at|toward|towards|into|to|near|down by|up at|behind|beyond|under)\s+(?:the\s+)?"
     r"((?:lower|upper|old|new|inner|outer\s+)?[a-z][a-z\s'-]{2,40}?)"
     r"(?:\s+at\s|\s+by\s|[.,\"]|$)",
+    re.I,
+)
+
+_BEHIND_DEST = re.compile(
+    r"\bbehind (?:the )?([a-z][a-z\s'-]{2,40}?)(?:[.,\"'\n]|$)",
     re.I,
 )
 
@@ -83,6 +88,7 @@ def _clean_place_label(raw):
     label = (raw or "").strip(" .,\"'")
     label = re.sub(r"\s+at\s+.*$", "", label, flags=re.I).strip()
     label = re.sub(r"\s+by\s+.*$", "", label, flags=re.I).strip()
+    label = re.sub(r"\s+to\s+(?:the\s+)?(?:buyers?|sellers?|auction|meeting).*$", "", label, flags=re.I).strip()
     return label
 
 
@@ -110,6 +116,8 @@ def extract_narrator_destinations(scene):
         _add(m.group(0))
     for m in _BY_AT_DEST.finditer(scene):
         _add(m.group(1))
+    for m in _BEHIND_DEST.finditer(scene):
+        _add(f"behind the {m.group(1)}")
 
     return found[:8]
 
@@ -131,16 +139,16 @@ def record_narrator_places(player, scene, area_id):
 def _destination_query(action):
     if not action:
         return None
-    m = re.search(
+    for pattern in (
+        r"\b(?:go|head|walk|move|slip|ease|make for)\s+behind\s+(?:the\s+)?(.+?)(?:\s*$|\.|,)",
         r"\b(?:go to|head to|walk to|move to|make for|enter|approach|"
         r"turn back toward|turn toward|follow(?:\s+the\s+)?(?:noise|sound|trail)?)\s+"
         r"(?:the\s+)?(.+?)(?:\s*$|\.|,)",
-        action.strip(),
-        re.I,
-    )
-    if not m:
-        return None
-    return _clean_place_label(m.group(1))
+    ):
+        m = re.search(pattern, action.strip(), re.I)
+        if m:
+            return _clean_place_label(m.group(1))
+    return None
 
 
 def _match_promoted_place(action, player, current_area):
@@ -177,7 +185,57 @@ def _match_promoted_place(action, player, current_area):
                 "label": label,
                 "tokens": sorted(query_tokens),
             }
+        for token in query_tokens:
+            if len(token) > 3 and token in scene:
+                label = query if query.lower().startswith("the ") else f"the {query}"
+                return {
+                    "id": _slugify(query),
+                    "label": label,
+                    "tokens": sorted(query_tokens),
+                }
     return None
+
+
+def _promote_from_journal_query(query, player, current_area):
+    """Promote a destination named in prior journal prose or dialogue."""
+    if not query:
+        return None
+    ql = query.lower()
+    query_tokens = _token_set(query)
+    for entry in reversed((player.get("journal") or [])[-12:]):
+        if entry.get("area") != current_area:
+            continue
+        blob = ((entry.get("scene") or "") + " " + (entry.get("excerpt") or "")).lower()
+        if ql in blob or any(len(t) > 3 and t in blob for t in query_tokens):
+            label = query if query.lower().startswith("the ") else f"the {query}"
+            return {
+                "id": _slugify(query),
+                "label": label,
+                "tokens": sorted(query_tokens),
+                "source": "dialogue",
+            }
+    return None
+
+
+def _orphan_local_approach(action, player, current_area):
+    """Hard-fail approaches to places never named in narration or dialogue."""
+    query = _destination_query(action)
+    if not query or not _APPROACH_VERBS.search(action or ""):
+        return False, None
+    if _match_promoted_place(action, player, current_area):
+        return False, None
+    if _promote_from_journal_query(query, player, current_area):
+        return False, None
+    for pattern, _, _ in _LOCAL_POI:
+        if pattern.search(action):
+            return False, None
+    store = (player.get("narrator_places") or {}).get(current_area, {})
+    ql = query.lower()
+    for rec in store.values():
+        label = (rec.get("label") or "").lower()
+        if ql in label or label in ql:
+            return False, None
+    return True, query
 
 
 def _promote_subplace(player, current_area, place_rec):
@@ -252,8 +310,20 @@ def resolve_local_movement(action, player, current_area):
         return sub, directive
 
     promoted = _match_promoted_place(action, player, current_area)
+    if not promoted:
+        query = _destination_query(action)
+        promoted = _promote_from_journal_query(query, player, current_area)
     if promoted:
         return _promote_subplace(player, current_area, promoted)
+
+    orphan, label = _orphan_local_approach(action, player, current_area)
+    if orphan:
+        return None, (
+            f"APPROACH FAILED — '{label}' is not a registered place here. "
+            f"The protagonist does NOT arrive or slip partway in. "
+            f"Do NOT describe perpetual approach or buyers appearing. "
+            f"One short beat of blocked movement only."
+        )
 
     return None, None
 

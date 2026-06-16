@@ -34,6 +34,7 @@ def _nothing_changed(action_context):
         ctx.get("approach_failed")
         or ctx.get("travel_failed")
         or ctx.get("target_ambiguous")
+        or ctx.get("wait_no_change")
     )
 
 
@@ -86,7 +87,8 @@ STRUCTURE_DIRECTIVES = {
         "PROSE STRUCTURE — STALLED / NO CHANGE:\n"
         "Nothing moved. One short paragraph (2–4 sentences). "
         "Do NOT re-paint the room, weather, or the NPC's face. "
-        "Open on friction — repetition, silence, impatience, or one small new detail."
+        "Open on friction — repetition, silence, impatience, or one small new detail. "
+        "Do NOT repeat the prior NPC line verbatim — especially not bell/auction/wait promises."
     ),
     "tension": (
         "PROSE STRUCTURE — HIGH TENSION:\n"

@@ -191,6 +191,12 @@ def build_conversation_ledger(player, journal, npc_id, action_ctx):
             "No stammer or new personality unless their persona quirk already includes it."
         )
 
+    if action_ctx.get("wait_no_change"):
+        lines.append(
+            "- WAIT produced NO state change. Do NOT repeat the prior NPC line verbatim — "
+            "especially not bell, auction, or wait promises."
+        )
+
     speech = (action_ctx or {}).get("player_speech")
     if speech:
         lines.append(f'- Protagonist says ONLY: "{speech}"')
