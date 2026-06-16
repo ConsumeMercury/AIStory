@@ -24,6 +24,9 @@
   --font-serif: "Palatino Linotype", "Book Antiqua", Georgia, serif;
   --font-sans: "Segoe UI", system-ui, sans-serif;
   --sidebar-w: 220px;
+  --delta-w: 220px;
+  --delta-pos: #6a9a72;
+  --delta-neg: #b86a6a;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -122,11 +125,14 @@ body.modal-open {
 .mini-bar .val { font-variant-numeric: tabular-nums; min-width: 2.5rem; }
 .wealth-tag { color: var(--wealth); }
 
-/* Main grid — story dominates */
+/* Main grid — story dominates, aftermath on the right */
 .main-grid {
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(var(--sidebar-w), var(--sidebar-w)) minmax(0, 1fr);
+  grid-template-columns:
+    minmax(var(--sidebar-w), var(--sidebar-w))
+    minmax(0, 1fr)
+    minmax(var(--delta-w), var(--delta-w));
   min-height: 0;
   overflow: hidden;
 }
@@ -161,6 +167,120 @@ body.modal-open {
   grid-column: 2;
   grid-row: 1;
   min-height: 0;
+}
+
+.delta-panel {
+  grid-column: 3;
+  grid-row: 1 / -1;
+  background: var(--bg-sidebar);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-width: var(--delta-w);
+  width: var(--delta-w);
+  min-height: 0;
+  overflow: hidden;
+}
+.delta-panel.delta-flash {
+  animation: delta-flash 0.55s ease;
+}
+@keyframes delta-flash {
+  0% { box-shadow: inset 0 0 0 1px var(--accent-dim); }
+  100% { box-shadow: inset 0 0 0 0 transparent; }
+}
+.delta-head {
+  flex-shrink: 0;
+  padding: 0.55rem 0.65rem;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-soft);
+}
+.delta-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.55rem 0.6rem 0.75rem;
+  font-size: 0.72rem;
+}
+.delta-empty {
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.45;
+}
+.delta-section {
+  margin-bottom: 0.75rem;
+}
+.delta-section:last-child {
+  margin-bottom: 0;
+}
+.delta-section-label {
+  font-size: 0.58rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+  margin-bottom: 0.35rem;
+}
+.delta-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.35rem;
+  padding: 0.22rem 0;
+  line-height: 1.35;
+}
+.delta-row + .delta-row {
+  border-top: 1px solid var(--border-soft);
+}
+.delta-label {
+  color: var(--text-dim);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.delta-value {
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  font-weight: 600;
+}
+.delta-pos { color: var(--delta-pos); }
+.delta-neg { color: var(--delta-neg); }
+.delta-neutral { color: var(--text-muted); }
+.delta-after {
+  color: var(--text-muted);
+  font-weight: normal;
+  font-size: 0.65rem;
+}
+.delta-skill {
+  padding: 0.45rem 0.5rem;
+  border: 1px solid var(--border-soft);
+  border-radius: 2px;
+  margin-bottom: 0.65rem;
+  line-height: 1.4;
+}
+.delta-skill-label {
+  display: block;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.2rem;
+}
+.delta-rumor,
+.delta-item {
+  color: var(--text-dim);
+  padding: 0.2rem 0;
+  line-height: 1.35;
+}
+.delta-item .rarity {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-right: 0.25rem;
+}
+.qa-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .story-scroll {
@@ -741,10 +861,25 @@ body.modal-open {
 }
 .mobile-tabs button.active { color: var(--accent); }
 
-/* Narrow screens: stack sidebar above story (always visible, never hidden) */
+/* Narrow screens: stack sidebar above story; aftermath drawer on mobile */
 body.layout-mobile .main-grid {
   grid-template-columns: 1fr;
   grid-template-rows: minmax(0, auto) minmax(0, 1fr);
+}
+body.layout-mobile .delta-panel {
+  display: none;
+  position: fixed;
+  top: var(--status-h, 2.2rem);
+  right: 0;
+  bottom: calc(var(--mobile-tabs-h, 2.5rem) + env(safe-area-inset-bottom, 0px));
+  width: min(280px, 88vw);
+  z-index: 40;
+  grid-column: unset;
+  grid-row: unset;
+  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.45);
+}
+body.layout-mobile.delta-drawer-open .delta-panel {
+  display: flex;
 }
 body.layout-mobile .sidebar {
   width: 100% !important;

@@ -14,6 +14,7 @@ from simulation.faction_reputation import ensure_faction_standing, _label as fac
 from simulation.institution_membership import ensure_institution_standing, INST_TYPE_LABELS
 from simulation.district_state import ensure_district_state
 from simulation.area_discovery import get_discovered_places_view, migrate_discovered_areas
+from simulation.scene_coherence import place_label
 
 PLAYER_FILE = "player/player.json"
 WORLD_FILE = "world/world_state.json"
@@ -113,7 +114,7 @@ def get_scene_labels(player, world=None):
     area = areas.get(player.get("area"), {})
     city_key = player.get("location", "?")
     city_name = locs.get("cities", {}).get(city_key, {}).get("name", city_key)
-    district = area.get("name", player.get("area", "?"))
+    district = place_label(player, area) or area.get("name", player.get("area", "?"))
     day = world.get("day", "?")
     tod = world.get("time_of_day", "")
     time_label = f"Day {day}"
@@ -386,12 +387,12 @@ def get_story_history(player, limit=60):
         city_key = entry.get("location") or player.get("location", "")
         city_name = locs.get("cities", {}).get(city_key, {}).get("name", city_key)
         district = area.get("name") or entry.get("area", "")
+        place = entry.get("place") or district or city_name
         day = entry.get("day", "?")
         hour = entry.get("hour")
         time_label = f"Day {day}"
         if hour is not None:
             time_label += f" · {hour}:00"
-        place = district or city_name
         blocks.append({
             "action": entry.get("action", ""),
             "time": time_label,
@@ -570,6 +571,132 @@ def get_world_panel(player):
     }
 
 
+def _check_snapshot(lc):
+    if not lc:
+        return None
+    return {
+        "kind": lc.get("kind"),
+        "skill": lc.get("skill"),
+        "success": lc.get("success"),
+        "roll": lc.get("roll"),
+        "total": lc.get("total"),
+        "difficulty": lc.get("difficulty"),
+        "margin": lc.get("margin"),
+    }
+
+
+def _player_delta_rows(before, player):
+    stats = player.get("stats") or {}
+    rows = []
+    for label, key in (("Health", "health"), ("Stamina", "stamina"), ("Stress", "stress")):
+        prev = before.get(key, 0)
+        after = stats.get(key, 0)
+        if prev != after:
+            rows.append({"label": label, "delta": after - prev, "after": after})
+    scalar_fields = (
+        ("Wealth", "wealth", lambda p: p.get("wealth", 0)),
+        ("Level", "level", lambda p: p.get("level", 1)),
+        ("XP", "xp", lambda p: p.get("xp", 0)),
+    )
+    for label, key, getter in scalar_fields:
+        prev = before.get(key, 0)
+        after = getter(player)
+        if prev != after:
+            rows.append({"label": label, "delta": after - prev, "after": after})
+    return rows
+
+
+def _npc_delta_rows(before, player):
+    rows = []
+    old_rel = {c["id"]: c for c in before.get("relations_full", [])}
+    for card in get_relations_view(player):
+        prev = old_rel.get(card["id"])
+        if not prev:
+            if card["familiarity"] >= 3:
+                rows.append({
+                    "name": card["name"],
+                    "stat": "met",
+                    "delta": 0,
+                    "after": card["familiarity"],
+                    "new": True,
+                })
+            continue
+        prev_bars = prev.get("bars") or {}
+        for key in ("trust", "respect", "fear", "affection", "familiarity"):
+            pv = prev_bars.get(key, {}).get("value", 0)
+            av = card["bars"][key]["value"]
+            if pv != av:
+                rows.append({
+                    "name": card["name"],
+                    "stat": key,
+                    "delta": av - pv,
+                    "after": av,
+                    "focus": card.get("is_focus", False),
+                })
+    rows.sort(key=lambda r: (not r.get("focus"), -abs(r.get("delta", 0))))
+    return rows
+
+
+def compute_turn_deltas(before, player, world):
+    """Stat and relationship changes since the start of the turn."""
+    if not before:
+        return {
+            "player": [],
+            "npcs": [],
+            "items": [],
+            "rumors": [],
+            "other": [],
+            "skill_check": None,
+            "empty": True,
+        }
+
+    player_rows = _player_delta_rows(before, player)
+    npc_rows = _npc_delta_rows(before, player)
+
+    old_ids = set(before.get("inventory_ids") or [])
+    items = []
+    for item in get_inventory_view(player):
+        iid = item.get("id") or item.get("name")
+        if iid and iid not in old_ids:
+            items.append({"name": item.get("name", "item"), "rarity": item.get("rarity", "common")})
+
+    old_rumor_texts = {r.get("text") for r in before.get("rumors", [])}
+    rumors = []
+    for r in get_rumors_view(player, limit=10):
+        if r["text"] not in old_rumor_texts:
+            rumors.append(r["text"])
+
+    other = []
+    if before.get("area") != player.get("area"):
+        labels = get_scene_labels(player, world)
+        other.append({"label": "Location", "text": labels["place_short"]})
+
+    skill_check = None
+    lc = player.get("last_check")
+    if lc and _check_snapshot(lc) != before.get("last_check"):
+        skill_check = {
+            "kind": lc.get("kind"),
+            "skill": lc.get("skill"),
+            "success": lc.get("success"),
+            "roll": lc.get("roll"),
+            "total": lc.get("total"),
+            "difficulty": lc.get("difficulty"),
+            "margin": lc.get("margin"),
+            "consequence": lc.get("consequence"),
+        }
+
+    empty = not (player_rows or npc_rows or items or rumors or other or skill_check)
+    return {
+        "player": player_rows,
+        "npcs": npc_rows[:10],
+        "items": items[:6],
+        "rumors": rumors[:4],
+        "other": other,
+        "skill_check": skill_check,
+        "empty": empty,
+    }
+
+
 def build_turn_metadata(player, world, action_text, before=None):
     """Structured turn payload for the web UI (CLI ignores this)."""
     from simulation.turn_trace import get_last_turn
@@ -577,17 +704,13 @@ def build_turn_metadata(player, world, action_text, before=None):
     labels = get_scene_labels(player, world)
     journal = player.get("journal") or []
     journal_entry = journal[-1] if journal else None
+    deltas = compute_turn_deltas(before, player, world)
 
-    new_rumors = []
+    new_rumors = deltas.get("rumors") or []
     rel_changes = []
     codex_entries = []
 
     if before:
-        old_rumor_texts = {r.get("text") for r in before.get("rumors", [])}
-        for r in get_rumors_view(player, limit=10):
-            if r["text"] not in old_rumor_texts:
-                new_rumors.append(r["text"])
-
         old_rel = {c["id"]: c["bars"] for c in before.get("relations_full", [])}
         for card in get_relations_view(player):
             prev = old_rel.get(card["id"])
@@ -596,11 +719,14 @@ def build_turn_metadata(player, world, action_text, before=None):
                     codex_entries.append({"category": "people", "name": card["name"]})
                 continue
             for key in ("trust", "respect", "fear", "affection"):
-                if abs(card["bars"][key]["value"] - prev.get(key, {}).get("value", 0)) >= 3:
+                pv = prev.get(key, {}).get("value", 0)
+                av = card["bars"][key]["value"]
+                if abs(av - pv) >= 3:
                     rel_changes.append({
                         "name": card["name"],
                         "stat": key,
-                        "value": card["bars"][key]["value"],
+                        "value": av,
+                        "delta": av - pv,
                     })
                     break
 
@@ -624,17 +750,34 @@ def build_turn_metadata(player, world, action_text, before=None):
         "relationship_changes": rel_changes[:3],
         "codex_entries": codex_entries[:3],
         "new_place": new_place,
+        "deltas": deltas,
     }
 
 
 def snapshot_for_delta(player):
+    stats = player.get("stats") or {}
+    inv_ids = []
+    for item in player.get("inventory") or []:
+        if isinstance(item, dict):
+            inv_ids.append(item.get("id") or item.get("name"))
     return {
+        "health": stats.get("health", 0),
+        "stamina": stats.get("stamina", 0),
+        "stress": stats.get("stress", 0),
+        "wealth": player.get("wealth", 0),
+        "level": player.get("level", 1),
+        "xp": player.get("xp", 0),
+        "area": player.get("area"),
+        "inventory_ids": inv_ids,
+        "last_check": _check_snapshot(player.get("last_check")),
         "rumors": get_rumors_view(player, limit=30),
         "relations_full": get_relations_view(player),
     }
 
 
 def get_full_state():
+    from game.undo import can_undo
+
     player = load(PLAYER_FILE, {})
     if not player:
         return None
@@ -653,4 +796,5 @@ def get_full_state():
         "timeline": get_timeline_view(player),
         "story_history": get_story_history(player),
         "help": HELP_COMMANDS,
+        "session": {"can_undo": can_undo()},
     }

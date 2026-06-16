@@ -7,18 +7,19 @@ import re
 
 from generation.descriptor_generator import short_descriptor
 from simulation.npc_schedule import schedule_hint, next_appearance
+from simulation.local_places import resolve_local_movement
+from simulation.target_resolution import (
+    action_mentions_role_or_descriptor,
+    resolve_action_target,
+    find_npc_by_name_in_text,
+)
 
 DIALOGUE_KINDS = frozenset({
     "talk", "personal_talk", "ask_name", "help", "give", "threaten",
     "insult", "show_respect", "withdraw", "ask_about", "find", "guild", "confess",
 })
 
-_SUBPLACE_PATTERNS = (
-    (re.compile(r"\bcellar\b.*\bfishmonger|\bfishmonger\b.*\bcellar\b", re.I), "cellar_fishmonger",
-     "the cellar behind the fishmonger"),
-    (re.compile(r"\bcellar\b|\bbasement\b|\bunder(?:ground|croft)\b", re.I), "cellar",
-     "a cellar nearby"),
-)
+_SUBPLACE_PATTERNS = ()  # legacy — see simulation/local_places.py
 
 _ASK_NAMED = re.compile(
     r"^\s*ask\s+([A-Za-z][A-Za-z'-]{1,28})\s+about\s+(.+)$", re.I,
@@ -29,36 +30,6 @@ _TALK_NAMED = re.compile(
 _ASK_FOR = re.compile(r"^\s*ask\s+(.+)$", re.I)
 
 
-def find_npc_by_name_in_text(text, npcs, player):
-    """Match a known NPC name mentioned in player text."""
-    if not text:
-        return None
-    lower = text.lower()
-    known = player.get("known_npcs", {})
-    hits = []
-    for nid, npc in npcs.items():
-        if npc.get("status") != "alive":
-            continue
-        name = (npc.get("name") or "").strip()
-        if not name or not known.get(nid, {}).get("name_known"):
-            continue
-        if name.lower() in lower:
-            hits.append(npc)
-        else:
-            first = name.split()[0].lower()
-            if len(first) > 2 and re.search(rf"\b{re.escape(first)}\b", lower):
-                hits.append(npc)
-    if len(hits) == 1:
-        return hits[0]
-    if len(hits) > 1:
-        focus = player.get("scene_focus")
-        for n in hits:
-            if n["id"] == focus:
-                return n
-        return hits[0]
-    return None
-
-
 def resolve_travel_destination(action, player, current_area, dests, areas):
     """
     Pick a travel destination from the area graph, or a sub-place within the current area.
@@ -66,21 +37,12 @@ def resolve_travel_destination(action, player, current_area, dests, areas):
     Never picks a random fallback district.
     """
     text = (action or "").lower()
-    flags = player.setdefault("story_flags", {})
 
-    for pattern, sub_id, label in _SUBPLACE_PATTERNS:
-        if pattern.search(text):
-            if current_area and ":docks" in current_area:
-                sub = {"id": sub_id, "label": label, "area": current_area}
-                player["scene_subplace"] = sub
-                flags[f"subplace_{sub_id}"] = True
-                return None, sub, (
-                    f"You go to {label} — still within the docks, but below the street noise. "
-                    "Same district; describe the enclosed space, not a new city quarter."
-                )
-            return None, None, (
-                "There is no fishmonger's cellar here — you are not at the docks."
-            )
+    sub, local_msg = resolve_local_movement(action, player, current_area)
+    if sub:
+        return None, sub, local_msg
+    if local_msg and not sub:
+        return None, None, local_msg
 
     if not dests:
         return None, None, "There is nowhere reachable from here on the map."
@@ -163,11 +125,17 @@ def resolve_target_and_absence(action, player, present, npcs, action_ctx, world,
             player["scene_focus"] = None
 
     if kind in DIALOGUE_KINDS and not action_ctx.get("target_id") and present:
-        focus = player.get("scene_focus")
-        if focus and focus in present_ids:
-            action_ctx["target_id"] = focus
-        elif len(present) == 1:
-            action_ctx["target_id"] = present[0]["id"]
+        resolved = resolve_action_target(
+            action, player, present, npcs=npcs, kind=kind,
+        )
+        if resolved:
+            action_ctx["target_id"] = resolved["id"]
+        elif not action_mentions_role_or_descriptor(action):
+            focus = player.get("scene_focus")
+            if focus and focus in present_ids:
+                action_ctx["target_id"] = focus
+            elif len(present) == 1:
+                action_ctx["target_id"] = present[0]["id"]
 
 
 def is_dialogue_continuation(kind, player, action_ctx, journal):

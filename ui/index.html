@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>AIStory</title>
-  <link rel="stylesheet" href="/ui/styles.css?v=13" />
+  <link rel="stylesheet" href="/ui/styles.css?v=14" />
 </head>
 <body>
   <div id="boot" class="boot">
@@ -121,12 +121,20 @@
           <div class="chip-row" id="chip-row"></div>
         </footer>
       </main>
+
+      <aside class="delta-panel" id="delta-panel" aria-label="Turn changes">
+        <div class="delta-head">Aftermath</div>
+        <div class="delta-body" id="delta-body">
+          <p class="delta-empty">Take an action to see stat changes.</p>
+        </div>
+      </aside>
     </div>
 
     <div id="sidebar-backdrop" class="sidebar-backdrop" aria-hidden="true"></div>
 
     <nav class="mobile-tabs" id="mobile-tabs">
       <button type="button" data-panel="story" class="active">Story</button>
+      <button type="button" data-panel="aftermath">Aftermath</button>
       <button type="button" data-panel="sheets">Sheets</button>
       <button type="button" data-panel="character">Character</button>
       <button type="button" data-panel="relations">Bonds</button>
@@ -143,6 +151,6 @@
     <div class="modal-body" id="modal-body"></div>
   </div>
 
-  <script src="/ui/app.js?v=13"></script>
+  <script src="/ui/app.js?v=14"></script>
 </body>
 </html>

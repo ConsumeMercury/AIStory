@@ -59,13 +59,13 @@ def _score_npc(npc, player, action_ctx, known, institutions=None):
     """Higher = more likely to be the scene's focus."""
     score = 0.0
     nid = npc["id"]
-    if action_ctx.get("target_id") == nid:
+    tid = action_ctx.get("target_id")
+    if tid == nid:
         score += 100
+    elif not tid and player.get("scene_focus") == nid:
+        score += 80
     if npc.get("key_npc"):
         score += 45
-    focus = player.get("scene_focus")
-    if focus == nid:
-        score += 80
     if known.get(nid, {}).get("name_known"):
         score += 60
     if known.get(nid, {}).get("seen_before"):
@@ -115,11 +115,30 @@ def select_scene_cast(present, player, action_ctx, max_focus=1):
     known = player.get("known_npcs", {})
     institutions = load(INST_FILE, {})
 
-    if kind in ("explore", "rest", "travel", "observe") and not action_ctx.get("target_id"):
+    if action_ctx.get("travel_failed") or action_ctx.get("approach_failed"):
+        return [], (
+            "NO MOVEMENT — the protagonist stays where they were. "
+            "Do NOT describe entering new buildings, crossing districts, or meeting strangers. "
+            "One short beat of frustration or re-orientation only."
+        )
+
+    if kind == "investigate" and not action_ctx.get("target_id"):
+        return [], (
+            "Environment-only investigation. Describe place, objects, sounds, contradictions. "
+            "Do NOT invent new named NPCs (no priests, clerks, or strangers with dialogue). "
+            "Background crowd is faceless — no speeches."
+        )
+
+    if kind in ("explore", "rest", "travel", "observe", "approach") and not action_ctx.get("target_id"):
         if kind == "find":
             pass  # find always wants a person
-        elif len(present) == 1:
+        elif len(present) == 1 and kind not in ("travel", "approach"):
             return present[:1], "No one else of note."
+        elif kind == "approach" and player.get("scene_subplace"):
+            return [], (
+                f"Local movement to {(player.get('scene_subplace') or {}).get('label', 'a nearby spot')}. "
+                "Place and atmosphere only — no focal NPC unless already in conversation."
+            )
         return [], (
             f"The {kind} action is about place and atmosphere. "
             f"Do NOT introduce or describe individual strangers. "

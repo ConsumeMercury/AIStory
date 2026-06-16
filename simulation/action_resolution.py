@@ -5,12 +5,10 @@ Simulation decides facts; the narrator renders them.
 
 import re
 
-import re
-
 from generation.descriptor_generator import short_descriptor, appearance_notes, gender_label
 from generation.item_generator import generate_item
 from simulation.item_engine import resolve_loot_to_player, equip_item, ensure_equipment
-from simulation.scene_coherence import find_npc_by_name_in_text
+from simulation.target_resolution import find_npc_by_name_in_text
 
 _ACQUIRE_VERBS = re.compile(
     r"\b(find|look for|search for|take|pick up|pickup|grab|loot|strip|pull)\b", re.I,
@@ -35,7 +33,7 @@ _DESC_HINTS = (
     (re.compile(r"\bred[\s-]?hair(?:ed)?|\bauburn\b", re.I), lambda n: _hair_match(n, ("red", "auburn", "copper"))),
     (re.compile(r"\b(grey|gray)[\s-]?hair|\bsilver[\s-]?hair\b", re.I), lambda n: _hair_match(n, ("grey", "gray", "silver", "white"))),
     (re.compile(r"\b(captain|sailor|dockmaster|harbour master|harbor master)\b", re.I), lambda n: n.get("role") in ("sailor", "merchant", "guard")),
-    (re.compile(r"\b(priest|cleric|monk)\b", re.I), lambda n: n.get("role") == "priest"),
+    (re.compile(r"\b(priest|cleric|monk|clerk|clerics)\b", re.I), lambda n: n.get("role") == "priest"),
     (re.compile(r"\b(merchant|trader)\b", re.I), lambda n: n.get("role") in ("merchant", "innkeeper")),
     (re.compile(r"\b(woman|lady|girl)\b", re.I), lambda n: n.get("gender") == "female"),
     (re.compile(r"\b(man|fellow|bloke)\b", re.I), lambda n: n.get("gender") == "male"),

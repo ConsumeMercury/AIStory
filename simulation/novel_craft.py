@@ -22,9 +22,13 @@ FORBIDDEN:
 - Emotion labels as narration ("you feel nervous", "he seems aggressive").
 - Stacked metaphors (three similes in one sentence).
 - Opening every scene with weather unless this is the first beat in a place.
-- Inventing new named characters when a focal person is specified — or none.
+- Inventing new named characters when a focal person is specified — or when NO FOCAL CHARACTER is set.
 - Changing an NPC's gender or pronouns from the FOCAL PERSON block (use ONLY the pronouns given).
 - Putting words in the protagonist's mouth unless THIS BEAT includes their exact quoted line.
+- Teleporting the protagonist to a different building or district than LOCATION LOCK specifies.
+- Inventing documents, ledger pages, keys, or loot not listed in SCENE FACTS or inventory facts.
+- Giving named dialogue to background crowd when the cast note says NO FOCAL CHARACTER.
+- Swapping which person speaks when the player named a role (priest, clerk, guard) or a known name.
 
 PLAYER AGENCY:
 - The player acts once per turn. Render that beat, then stop.
@@ -103,6 +107,20 @@ CRAFT_BY_KIND = {
         "BEAT TYPE — PAUSE:\n"
         "Body and room. Time passing in small things — breath, ache, light changing."
     ),
+    "approach": (
+        "BEAT TYPE — LOCAL MOVEMENT:\n"
+        "A few steps within the same district — door, office, corner. "
+        "Obey LOCATION LOCK. No hours-long travel. No new named speakers unless in SCENE FACTS."
+    ),
+    "investigate": (
+        "BEAT TYPE — INVESTIGATION:\n"
+        "Compare details, contradictions, physical evidence. "
+        "If NO FOCAL CHARACTER: environment only — no invented priests, clerks, or witnesses with dialogue."
+    ),
+    "ask_about": (
+        "BEAT TYPE — INQUIRY:\n"
+        "The protagonist asks; ONLY the focal person answers. No proverb-spouting stranger swap."
+    ),
 }
 
 
@@ -149,6 +167,9 @@ def token_budget_for_kind(action_kind):
         "explore": 2400,
         "rest": 2200,
         "travel": 2600,
+        "approach": 1800,
+        "investigate": 2200,
+        "ask_about": 1600,
         "attack": 3200,
         "examine": 1800,
         "observe": 1800,

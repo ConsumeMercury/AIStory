@@ -17,6 +17,7 @@ _PATTERNS = [
     (re.compile(r"\b(blackmail|leverage against| expose them)\b", re.I), "blackmail"),
     (re.compile(r"\b(accuse|call out|denounce|you did it)\b", re.I), "accuse"),
     (re.compile(r"\b(ask about|ask around about|what do you know about|who killed|who stole|about the murder|about the theft)\b", re.I), "ask_about"),
+    (re.compile(r"^\s*ask\s+[A-Za-z][A-Za-z'-]{1,28}\s+about\s+", re.I), "ask_about"),
     (re.compile(r"\b(stake out|wait for|watch for|keep watch)\b", re.I), "wait"),
     (re.compile(r"\b(hunt|track|stalk|trail|follow tracks|follow the trail)\b", re.I), "hunt"),
     (re.compile(r"\b(ask for work|looking for work|need work|any work|hire me|find work)\b", re.I), "guild"),
@@ -29,6 +30,15 @@ _PATTERNS = [
     (re.compile(r"\bfind someone\b", re.I), "find"),
     (re.compile(r"\bfind (?:the |a )?(?:red[\s-]?haired|captain|priest|merchant|sailor|woman|man|guard|blacksmith)\b", re.I), "find"),
     (re.compile(r"\b(attack|strike|kill|fight|stab|swing at|draw .*blade|cut down)\b", re.I), "attack"),
+    (re.compile(
+        r"\b(enter|go inside|step into|walk into|go in to|go in)\b", re.I,
+    ), "approach"),
+    (re.compile(
+        r"\b(go to|head to|approach|walk to|move to|make for)\s+(?:the\s+)?"
+        r"(?:door|gate|oak|portal|office|clerk|clerks|sanctuary|chapel|altar|"
+        r"temple|shrine|inn|tavern|cellar|alley|wharf|stall|entrance|archway)\b",
+        re.I,
+    ), "approach"),
     (re.compile(r"\b(travel|go to|head to|journey|ride to|set out for)\b", re.I), "travel"),
     (re.compile(r"\b(walk around|wander|stroll|look around|explore|roam|amble)\b", re.I), "explore"),
     (re.compile(r"\b(give|offer|pay|hand over|gift|donate)\b", re.I), "give"),
@@ -115,41 +125,11 @@ def extract_player_speech(action, player=None):
     return None
 
 
-def _target_hint(action, present_npcs, player, npcs=None):
-    text = action.lower()
-    if npcs:
-        from simulation.scene_coherence import find_npc_by_name_in_text
-        named = find_npc_by_name_in_text(action, npcs, player)
-        if named:
-            for n in present_npcs:
-                if n["id"] == named["id"]:
-                    return n
-            return None
-    focus = player.get("scene_focus")
-    for n in present_npcs:
-        if n["id"] == focus:
-            return n
-    if re.search(r"\b(woman|girl|lady|she|her)\b", text):
-        for n in present_npcs:
-            if n.get("gender") == "female":
-                return n
-    if re.search(r"\b(man|boy|he|him)\b", text) and "woman" not in text:
-        for n in present_npcs:
-            if n.get("gender") == "male":
-                return n
-    for n in present_npcs:
-        build = n.get("physique", {}).get("build", "")
-        if build and build.lower() in text:
-            return n
-    known = player.get("known_npcs", {})
-    for n in present_npcs:
-        if known.get(n["id"], {}).get("name_known"):
-            return n
-    if focus:
-        for n in present_npcs:
-            if n["id"] == focus:
-                return n
-    return present_npcs[0] if present_npcs else None
+def _target_hint(action, present_npcs, player, npcs=None, kind="general"):
+    from simulation.target_resolution import resolve_action_target
+    return resolve_action_target(
+        action, player, present_npcs, npcs=npcs, kind=kind,
+    )
 
 
 def interpret_action(action, player, present_npcs, world, npcs=None):
@@ -166,11 +146,16 @@ def interpret_action(action, player, present_npcs, world, npcs=None):
     if not intents:
         intents = ["neutral"]
 
-    target = _target_hint(action, present_npcs, player, npcs=npcs)
+    target = _target_hint(action, present_npcs, player, npcs=npcs, kind=kind)
     target_descriptor = short_descriptor(target) if target else None
     speech = extract_player_speech(action, player)
     if kind == "general" and speech and speech.lower().startswith("my name is"):
         kind = "talk"
+
+    from simulation.local_places import looks_like_local_movement
+    if kind == "travel" and looks_like_local_movement(action):
+        kind = "approach"
+
     time_of_day = world.get("time_of_day", "day")
     weather = world.get("weather", "Clear")
 
@@ -368,6 +353,17 @@ def interpret_action(action, player, present_npcs, world, npcs=None):
             f'The protagonist confesses aloud: "{speech[:100]}". '
             "Only the designated witness or focal person may answer — not a random stranger. "
             "One to three lines of reply, then stop."
+        )
+
+    elif kind == "approach":
+        ctx["memory_tag"] = "observation"
+        ctx["skill_xp"] = ("navigation", 3)
+        ctx["stamina_delta"] = -1
+        ctx["story_directive"] = (
+            "Local movement within the same district — a few steps to a door, office, or corner. "
+            "Describe arriving at the specific sub-place only. "
+            "No district travel, no hours passing, no new city quarters. "
+            "Do NOT invent items, documents, or NPC dialogue unless SCENE FACTS provide them."
         )
 
     elif kind == "travel":

@@ -195,6 +195,53 @@ def audit_non_fatal_no_ghost_speaker():
         _assert(c["focus_status"][0] != "dead", "non-fatal focal should not be dead")
 
 
+def audit_talk_priest_overrides_focus():
+    """Talk to the priest must not default to scene_focus soldier."""
+    from storage import load
+
+    player = _reset_player_baseline()
+    npcs = load("characters/npcs.json", {})
+    area = player.get("area")
+    present_roles = {}
+    for nid, npc in npcs.items():
+        if npc.get("area") == area and npc.get("status") == "alive":
+            present_roles[nid] = npc.get("role")
+
+    priest_ids = [nid for nid, role in present_roles.items() if role == "priest"]
+    if not priest_ids:
+        print("SKIP  talk_priest (no priest in area)")
+        return
+
+    soldier_ids = [nid for nid, role in present_roles.items() if role in ("soldier", "guard", "mercenary")]
+    focus_id = soldier_ids[0] if soldier_ids else list(present_roles.keys())[0]
+    from storage import save
+    player["scene_focus"] = focus_id
+    player.setdefault("known_npcs", {}).setdefault(focus_id, {})["name_known"] = True
+    save("player/player.json", player)
+
+    _run_sequence(["look around", "Talk to the priest"])
+    last = CAPTURED[-1]
+    _assert(last["kind"] == "talk", f"expected talk, got {last['kind']}")
+    if last.get("target_id"):
+        role = npcs.get(last["target_id"], {}).get("role")
+        _assert(role == "priest", f"talk to priest should target priest, got role={role!r}")
+
+
+def audit_withdraw_clears_focus():
+    from storage import load, save
+
+    _reset_player_baseline()
+    _run_sequence(["look around"])
+    player = load("player/player.json", {})
+    focus = player.get("scene_focus")
+    if not focus:
+        print("SKIP  withdraw_clears_focus (no focus after look around)")
+        return
+    _run_sequence(["leave"])
+    player = load("player/player.json", {})
+    _assert(player.get("scene_focus") is None, "withdraw should clear scene_focus")
+
+
 def main():
     tests = [
         ("explore_anchor", audit_explore_anchor),
@@ -203,6 +250,8 @@ def main():
         ("confession_witness", audit_confession_witness),
         ("find_person_role", audit_find_person_role),
         ("non_fatal_focal", audit_non_fatal_no_ghost_speaker),
+        ("talk_priest_overrides_focus", audit_talk_priest_overrides_focus),
+        ("withdraw_clears_focus", audit_withdraw_clears_focus),
     ]
     failed = []
     for name, fn in tests:

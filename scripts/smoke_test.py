@@ -411,10 +411,10 @@ def test_travel_graph():
 
 
 def test_scene_coherence():
+    from simulation.target_resolution import find_npc_by_name_in_text
     from simulation.scene_coherence import (
         resolve_travel_destination,
         build_conversation_ledger,
-        find_npc_by_name_in_text,
         sync_scene_focus,
     )
     from simulation.action_interpreter import extract_player_speech

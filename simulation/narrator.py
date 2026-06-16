@@ -23,6 +23,7 @@ from simulation.immersion_context import (
     institution_affiliation, npc_active_want,
 )
 from simulation.novel_craft import CRAFT_CORE, craft_for_kind, narrative_outcome, token_budget_for_kind
+from simulation.generation_guardrails import guardrails_prompt_block
 from simulation.gemini_client import generate_text
 from storage import load
 
@@ -218,10 +219,15 @@ def generate_scene(player_action, world, player, present_npcs,
         place += " — " + (area["atmosphere"][0] if area["atmosphere"] else "")
 
     focus_npc_id = None
-    if present_npcs:
+    ctx = action_context or {}
+    if ctx.get("travel_failed") or ctx.get("approach_failed"):
+        focus_npc_id = None
+    elif present_npcs:
         focus_npc_id = present_npcs[0].get("id")
-    elif action_context:
-        focus_npc_id = action_context.get("target_id") or player.get("scene_focus")
+    elif ctx.get("target_id"):
+        focus_npc_id = ctx.get("target_id")
+    elif kind not in ("investigate", "explore", "observe", "examine", "approach", "rest", "travel"):
+        focus_npc_id = player.get("scene_focus")
 
     npc_block = _build_npc_context(
         present_npcs, known_ids, new_ids, rels, tick, name_reveal, player, crowd_note,
@@ -321,6 +327,7 @@ THIS BEAT: {action_block}
 {npc_block}
 
 {avoid_block}
+{guardrails_prompt_block()}
 {immersion}
 
 Write the scene now. Literary novel prose only — obey CRAFT, SCENE MODE, and DO NOT REPEAT."""

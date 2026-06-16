@@ -21,8 +21,11 @@ from simulation.scene_coherence import (
     sync_scene_focus,
     resolve_target_and_absence,
     resolve_travel_destination,
+    place_label,
     DIALOGUE_KINDS,
 )
+from simulation.local_places import resolve_local_movement, build_place_lock
+from simulation.target_resolution import resolve_investigate_target
 from simulation.npc_memory_engine import record_player_action
 from simulation.skill_check import run_action_check, apply_check_costs
 from simulation.player_identity import (
@@ -351,6 +354,25 @@ def process_player_action(action):
                 + " No one matching that description is here — show a failed search."
             ).strip()
 
+    if kind == "investigate" and not action_ctx.get("target_id"):
+        inv_target = resolve_investigate_target(action, player, present)
+        if inv_target:
+            action_ctx["target_id"] = inv_target["id"]
+            action_ctx["story_directive"] = (
+                action_ctx.get("story_directive", "")
+                + f" Focal investigator contact: {inv_target.get('name') or inv_target.get('role', 'someone')} "
+                f"({inv_target.get('role', 'stranger')}) — only they may speak if dialogue occurs."
+            ).strip()
+
+    if kind == "withdraw":
+        prev_focus = player.get("scene_focus")
+        if prev_focus and any(n["id"] == prev_focus for n in present):
+            action_ctx["target_id"] = prev_focus
+            action_ctx["withdraw_from"] = prev_focus
+        player["scene_focus"] = None
+        with state_lock():
+            save(PLAYER_FILE, player)
+
     if kind == "confess":
         relationships = load("characters/relationships.json", {})
         respondent = resolve_confession_respondent(
@@ -387,6 +409,24 @@ def process_player_action(action):
         with state_lock():
             save(PLAYER_FILE, player)
 
+    if kind == "approach":
+        sub, local_msg = resolve_local_movement(action, player, player.get("area"))
+        if sub:
+            extra_directive = local_msg
+            with state_lock():
+                save(PLAYER_FILE, player)
+        else:
+            action_ctx["approach_failed"] = True
+            fail_msg = local_msg or (
+                "That specific place is not reachable from where you stand. "
+                "Name a door, office, or corner that fits this district."
+            )
+            action_ctx["story_directive"] = (
+                action_ctx.get("story_directive", "")
+                + " APPROACH FAILED — no movement. Do NOT invent interiors or loot."
+            ).strip()
+            extra_directive = fail_msg
+
     if kind == "travel":
         from simulation.travel_engine import travel, list_destinations
         dests = list_destinations(player.get("area"))
@@ -412,7 +452,14 @@ def process_player_action(action):
             digest = build_arrival_digest(travel_before, chosen)
             extra_directive = msg + " " + digest
         else:
-            extra_directive = travel_msg or "Nowhere reachable from here."
+            action_ctx["travel_failed"] = True
+            fail_msg = travel_msg or "Nowhere reachable from here."
+            action_ctx["story_directive"] = (
+                "TRAVEL FAILED — the destination is not on the map from here. "
+                "The protagonist does NOT move. Do NOT invent doors, interiors, new districts, "
+                "or conversations with strangers. One short beat of re-orientation only."
+            )
+            extra_directive = fail_msg
 
     if kind == "wait":
         advance_clock(2)
@@ -455,6 +502,7 @@ def process_player_action(action):
             "talk", "personal_talk", "help", "give", "ask_name",
             "threaten", "insult", "trade", "show_respect", "find", "guild",
             "explore", "attack", "confess", "search",
+            "ask_about", "investigate", "accuse", "blackmail",
         ):
             player["scene_focus"] = action_ctx["target_id"]
         to_introduce = _update_known(player, present, tick)
@@ -682,6 +730,13 @@ def process_player_action(action):
     rels_toward_player = {nid: relationships.get(nid, {}).get("player", {}) for nid in focus_id_list}
 
     immersion_block = _immersion_block(kind, player, world, action_ctx, rumors, events, action)
+    areas_for_place = load(AREAS_FILE, {})
+    area_for_place = areas_for_place.get(player.get("area"), {})
+    place_lock = build_place_lock(player, area_for_place, action_ctx)
+    if place_lock:
+        immersion_block = (
+            (immersion_block + "\n\n" + place_lock).strip() if immersion_block else place_lock
+        )
     rival_note = rival_directive(player, npcs)
     if rival_note:
         immersion_block = (immersion_block + "\n\n" + rival_note).strip()
@@ -737,12 +792,17 @@ def process_player_action(action):
         focus_npc = action_ctx.get("target_id")
         if not focus_npc and not action_ctx.get("find_failed"):
             focus_npc = player.get("scene_focus")
+        journal_areas = load(AREAS_FILE, {})
+        journal_area = journal_areas.get(player.get("area"), {})
+        journal_place = place_label(player, journal_area)
         player.setdefault("journal", []).append({
             "tick": tick, "day": world.get("day"), "hour": world.get("hour"),
             "action": action, "kind": kind,
             "excerpt": scene[:400],
             "scene": scene,
             "location": player.get("location"), "area": player.get("area"),
+            "place": journal_place,
+            "subplace": (player.get("scene_subplace") or {}).get("id"),
             "focus_npc": focus_npc,
             "combat_fatal": action_ctx.get("combat_fatal") if kind == "attack" else player.get("last_combat_fatal"),
         })

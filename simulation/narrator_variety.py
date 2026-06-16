@@ -105,17 +105,42 @@ def build_continuity_note(journal, action_kind, player_action, player=None, acti
             + name_lock
         )
 
-    if action_kind in ("talk", "personal_talk", "show_respect", "threaten", "insult", "give", "help", "guild"):
+    if action_kind in ("talk", "personal_talk", "show_respect", "threaten", "insult", "give", "help", "guild", "ask_about"):
         thread = (
             "Same conversation thread — pick up mid-exchange, no scene reset."
             if same_thread else
-            "Conversation continues with the same focal person."
+            "Conversation with the focal person named in SCENE FACTS — not scene_focus by habit."
         )
         return (
             f"CONTINUITY: {thread} "
             f"Previous beat ({last_kind}): {last_action}. "
-            "Do not reset the scene or repeat establishing description."
+            "Do not reset the scene or repeat establishing description. "
+            "ONLY the focal person in SCENE FACTS may speak — not a different role."
             + name_lock
+        )
+
+    if action_kind == "investigate":
+        return (
+            "CONTINUITY: Investigation beat — physical evidence and observation. "
+            "If NO FOCAL CHARACTER in SCENE FACTS, do not invent speaking NPCs."
+        )
+
+    if action_kind == "approach":
+        return (
+            "CONTINUITY: Local movement within the same district. "
+            "Obey LOCATION LOCK — do not jump to a different building than requested."
+        )
+
+    if action_kind == "withdraw":
+        return (
+            "CONTINUITY: The protagonist disengages. "
+            "The person they leave behind may react in posture only — one beat, then done."
+        )
+
+    if action_context and action_context.get("travel_failed"):
+        return (
+            "CONTINUITY: Travel failed — the protagonist did NOT move. "
+            "Do not narrate arrival elsewhere."
         )
 
     if last_kind == action_kind == "explore":
@@ -182,6 +207,31 @@ def scene_mode_rules(action_kind, has_journal):
             "SCENE MODE — SEARCH:\n"
             "- Describe finding ONLY items listed in SCENE FACTS.\n"
             "- No invented loot. Protagonist does not speak unless given words."
+        )
+    if action_kind == "investigate":
+        return (
+            "SCENE MODE — INVESTIGATE:\n"
+            "- Physical clues, contradictions, environment.\n"
+            "- If NO FOCAL CHARACTER: no named NPC dialogue — crowd is faceless.\n"
+            "- Do NOT invent priests, clerks, or ledger pages unless SCENE FACTS list them."
+        )
+    if action_kind == "approach":
+        return (
+            "SCENE MODE — LOCAL MOVEMENT:\n"
+            "- Same district only. Obey LOCATION LOCK.\n"
+            "- No hours passing, no district travel, no new conversations unless SCENE FACTS name someone."
+        )
+    if action_kind == "ask_about":
+        return (
+            "SCENE MODE — ASK ABOUT:\n"
+            "- ONLY the focal person answers.\n"
+            "- Do NOT swap in a different character because they speak in riddles."
+        )
+    if action_kind == "withdraw":
+        return (
+            "SCENE MODE — WITHDRAW:\n"
+            "- Protagonist backs away or ends the exchange.\n"
+            "- Brief reaction from the person left behind — no new plot."
         )
     if action_kind == "explore" and has_journal:
         return (

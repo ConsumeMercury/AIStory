@@ -99,6 +99,118 @@ function relBar(label, bar) {
     </div>`;
 }
 
+function formatDelta(n) {
+  if (n === 0 || n == null) return "±0";
+  return n > 0 ? `+${n}` : String(n);
+}
+
+function deltaClass(n) {
+  if (n > 0) return "delta-pos";
+  if (n < 0) return "delta-neg";
+  return "delta-neutral";
+}
+
+function renderDeltaRow(label, delta, after, suffix = "") {
+  return `
+    <div class="delta-row">
+      <span class="delta-label">${esc(label)}${suffix}</span>
+      <span class="delta-value ${deltaClass(delta)}">
+        ${formatDelta(delta)}
+        ${after != null ? `<span class="delta-after"> → ${after}</span>` : ""}
+      </span>
+    </div>`;
+}
+
+function renderDeltaPanel(turn) {
+  const body = $("#delta-body");
+  const panel = $("#delta-panel");
+  if (!body) return;
+
+  const d = turn?.deltas;
+  if (!d || d.empty) {
+    body.innerHTML = `<p class="delta-empty">${
+      turn ? "No changes this turn." : "Take an action to see stat changes."
+    }</p>`;
+    return;
+  }
+
+  let html = "";
+
+  if (d.skill_check) {
+    const sc = d.skill_check;
+    const skill = titleCase(sc.skill || sc.kind || "Check");
+    const outcome = sc.success ? "Success" : "Failure";
+    const detail = [
+      sc.roll != null ? `d${sc.roll}` : null,
+      sc.total != null ? `→ ${sc.total}` : null,
+      sc.difficulty != null ? `vs ${sc.difficulty}` : null,
+    ]
+      .filter(Boolean)
+      .join(" ");
+    html += `
+      <div class="delta-skill ${sc.success ? "delta-pos" : "delta-neg"}">
+        <span class="delta-skill-label">${esc(skill)}</span>
+        <span>${esc(outcome)}${detail ? ` · ${esc(detail)}` : ""}</span>
+        ${sc.consequence ? `<div class="delta-after">${esc(sc.consequence)}</div>` : ""}
+      </div>`;
+  }
+
+  if (d.player?.length) {
+    html += `<div class="delta-section"><div class="delta-section-label">You</div>`;
+    for (const row of d.player) {
+      html += renderDeltaRow(row.label, row.delta, row.after);
+    }
+    html += `</div>`;
+  }
+
+  if (d.npcs?.length) {
+    html += `<div class="delta-section"><div class="delta-section-label">Others</div>`;
+    for (const row of d.npcs) {
+      const statLabel = row.stat === "met" ? "met" : titleCase(row.stat);
+      const suffix = row.stat === "met" ? "" : ` · ${statLabel}`;
+      html += renderDeltaRow(row.name, row.delta, row.after, suffix);
+    }
+    html += `</div>`;
+  }
+
+  if (d.items?.length) {
+    html += `<div class="delta-section"><div class="delta-section-label">Found</div>`;
+    for (const item of d.items) {
+      html += `<div class="delta-item"><span class="rarity ${rarityClass(item.rarity)}">${esc(item.rarity || "common")}</span>${esc(item.name)}</div>`;
+    }
+    html += `</div>`;
+  }
+
+  if (d.rumors?.length) {
+    html += `<div class="delta-section"><div class="delta-section-label">Rumors</div>`;
+    for (const rumor of d.rumors) {
+      html += `<div class="delta-rumor">${esc(rumor)}</div>`;
+    }
+    html += `</div>`;
+  }
+
+  if (d.other?.length) {
+    html += `<div class="delta-section"><div class="delta-section-label">World</div>`;
+    for (const row of d.other) {
+      html += `<div class="delta-row"><span class="delta-label">${esc(row.label)}</span><span class="delta-value delta-neutral">${esc(row.text)}</span></div>`;
+    }
+    html += `</div>`;
+  }
+
+  body.innerHTML = html || `<p class="delta-empty">No changes this turn.</p>`;
+
+  if (panel) {
+    panel.classList.remove("delta-flash");
+    void panel.offsetWidth;
+    panel.classList.add("delta-flash");
+  }
+}
+
+function updateSessionControls() {
+  const btn = $("#btn-undo");
+  if (btn) btn.disabled = busy || !state?.session?.can_undo;
+}
+
 function setBadge(el, count) {
   if (!el) return;
   if (count > 0) {
@@ -216,6 +328,7 @@ function renderSidebar() {
   setBadge($("#badge-inv"), invCount);
   setBadge($("#badge-bonds"), bondCount);
   setBadge($("#badge-rumors"), rumorCount);
+  updateSessionControls();
 }
 
 function initSidebar() {
@@ -427,18 +540,23 @@ async function renderSavesModal() {
 
 async function undoLastTurn() {
   if (busy) return;
-  busy = true;
+  setBusy(true);
   try {
     const res = await api("/api/undo", { method: "POST" });
     if (res.state) {
       state = res.state;
-      refreshSidebar();
+      storyLog.innerHTML = "";
+      hydrateStoryHistory(state.story_history || []);
+      renderStatusBar();
+      renderSidebar();
+      renderDeltaPanel(null);
+      refreshOpenModal();
       appendSystem("Undid the last turn.");
     }
   } catch (err) {
     appendSystem(err.message || "Nothing to undo.");
   } finally {
-    busy = false;
+    setBusy(false);
   }
 }
 
@@ -722,6 +840,7 @@ function setBusy(on) {
   actionInput.disabled = on;
   sendBtn.disabled = on;
   $("#app")?.classList.toggle("is-busy", on);
+  updateSessionControls();
 }
 
 function refreshOpenModal() {
@@ -734,6 +853,9 @@ function applyResult(result) {
   clearPending();
   if (result?.scene) {
     appendTurn(result.turn, result.scene, isMetaText(result.scene));
+  }
+  if (result?.turn) {
+    renderDeltaPanel(result.turn);
   }
   if (result?.state) {
     state = result.state;
@@ -794,6 +916,7 @@ async function startGame(result) {
     applyState(state);
   }
   storyLog.innerHTML = "";
+  renderDeltaPanel(null);
   if (result?.scene) {
     applyResult(result);
   } else {
@@ -921,8 +1044,12 @@ mobileTabs?.querySelectorAll("button").forEach((btn) => {
     mobileTabs.querySelectorAll("button").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
     const panel = btn.dataset.panel;
+    document.body.classList.toggle("delta-drawer-open", panel === "aftermath");
     if (panel === "story") {
       storyLog?.scrollIntoView({ block: "start", behavior: "smooth" });
+      return;
+    }
+    if (panel === "aftermath") {
       return;
     }
     if (panel === "sheets") {
