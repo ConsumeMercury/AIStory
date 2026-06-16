@@ -206,6 +206,24 @@ function renderDeltaPanel(turn) {
   }
 }
 
+function renderProseValidationDebug(issues) {
+  const body = $("#delta-body");
+  if (!body || !issues?.length) return;
+
+  const block = `
+    <div class="delta-section delta-prose-debug">
+      <div class="delta-section-label">Prose checks</div>
+      ${issues.map((issue) => `<div class="delta-prose-issue">${esc(issue)}</div>`).join("")}
+    </div>`;
+
+  const empty = body.querySelector(".delta-empty");
+  if (empty) {
+    body.innerHTML = block;
+    return;
+  }
+  body.insertAdjacentHTML("beforeend", block);
+}
+
 function updateSessionControls() {
   const btn = $("#btn-undo");
   if (btn) btn.disabled = busy || !state?.session?.can_undo;
@@ -924,6 +942,9 @@ function applyResult(result) {
   }
   if (result?.turn) {
     renderDeltaPanel(result.turn);
+  }
+  if (result?.debug?.prose_issues?.length) {
+    renderProseValidationDebug(result.debug.prose_issues);
   }
   if (result?.state) {
     state = result.state;

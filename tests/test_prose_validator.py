@@ -79,3 +79,26 @@ def test_log_scene_prose_issues_warns_but_does_not_raise(caplog):
         )
     assert issues
     assert any("prose validation" in r.message for r in caplog.records)
+
+
+def test_prose_issues_recorded_in_turn_trace(monkeypatch):
+    from unittest.mock import MagicMock, patch
+
+    from simulation.story_loop import process_player_action
+    from simulation.turn_trace import get_last_turn
+
+    mock_narr = MagicMock()
+    mock_narr.generate_scene.return_value = (
+        "You step into the harbor district alone. The wind moves through empty stalls. "
+        "Nothing answers. The stones keep their silence."
+    )
+    monkeypatch.setattr(
+        "simulation.story_loop.try_meta_command",
+        lambda action: None,
+    )
+    with patch("simulation.story_loop.get_narrator", return_value=mock_narr):
+        with patch("simulation.story_loop.simulation_runner.get_current_tick", return_value=1):
+            process_player_action("talk to priest")
+
+    trace = get_last_turn()
+    assert trace.get("prose_issues")

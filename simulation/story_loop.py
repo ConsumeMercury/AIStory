@@ -803,7 +803,7 @@ def process_player_action(action, *, on_prose_chunk=None):
         on_prose_chunk=on_prose_chunk,
     )
 
-    log_scene_prose_issues(
+    prose_issues = log_scene_prose_issues(
         scene,
         player=player,
         npcs=npcs,
@@ -857,6 +857,7 @@ def process_player_action(action, *, on_prose_chunk=None):
         skill_check=player.get("last_check"),
         scene_preview=(scene or "")[:240],
         area_arrival=area_arrival,
+        prose_issues=prose_issues or None,
     )
 
     return scene

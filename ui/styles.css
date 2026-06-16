@@ -272,6 +272,17 @@ body.modal-open {
   padding: 0.2rem 0;
   line-height: 1.35;
 }
+.delta-prose-debug {
+  border-top: 1px dashed var(--border-soft, rgba(255, 255, 255, 0.12));
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+}
+.delta-prose-issue {
+  color: var(--accent-warn, #c9a227);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  padding: 0.15rem 0;
+}
 .delta-item .rarity {
   font-size: 0.62rem;
   text-transform: uppercase;
