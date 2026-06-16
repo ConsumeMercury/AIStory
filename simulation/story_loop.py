@@ -27,6 +27,9 @@ from simulation.scene_coherence import (
 from simulation.local_places import resolve_local_movement
 from simulation.target_resolution import resolve_investigate_target
 from simulation.generation_guardrails import build_hard_constraints_block
+from simulation.prose_validator import log_scene_prose_issues
+from simulation.npc_continuity import ensure_npc_continuity_locks
+from simulation.journal_summary import maybe_compact_journal
 from simulation.npc_memory_engine import record_player_action
 from simulation.skill_check import run_action_check, apply_check_costs
 from simulation.player_identity import (
@@ -303,7 +306,7 @@ def _immersion_block(kind, player, world, action_ctx, rumors, events, action):
     return "\n\n".join(p for p in parts if p)
 
 
-def process_player_action(action):
+def process_player_action(action, *, on_prose_chunk=None):
     from simulation.turn_trace import record_turn
 
     meta = try_meta_command(action)
@@ -770,6 +773,11 @@ def process_player_action(action):
         focal_id, focal_npc, scene_place, action_ctx,
     )
 
+    with state_lock():
+        player = load(PLAYER_FILE, {})
+        if ensure_npc_continuity_locks(player, focus_npcs):
+            save(PLAYER_FILE, player)
+
     scene = get_narrator().generate_scene(
         player_action=action,
         world=world,
@@ -792,6 +800,18 @@ def process_player_action(action):
         focal_npc_id=focal_id,
         scene_place=scene_place,
         hard_constraints=hard_constraints,
+        on_prose_chunk=on_prose_chunk,
+    )
+
+    log_scene_prose_issues(
+        scene,
+        player=player,
+        npcs=npcs,
+        action_ctx=action_ctx,
+        focal_npc_id=focal_id,
+        scene_place=scene_place,
+        present_npcs=focus_npcs,
+        known_ids=known_ids,
     )
 
     if name_reveal:
@@ -821,6 +841,7 @@ def process_player_action(action):
             "focus_npc": focus_npc,
             "combat_fatal": action_ctx.get("combat_fatal") if kind == "attack" else player.get("last_combat_fatal"),
         })
+        maybe_compact_journal(player)
         player["journal"] = player["journal"][-300:]
         save(PLAYER_FILE, player)
 

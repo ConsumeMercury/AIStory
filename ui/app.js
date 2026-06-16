@@ -834,6 +834,74 @@ function bindMapActions() {
   });
 }
 
+const META_COMMANDS = new Set([
+  "help", "?", "stats", "status", "sheet", "skills", "inventory", "inv",
+  "goals", "objectives", "map", "where", "journal", "bonds", "relationships",
+  "factions", "reputation", "guilds", "institutions", "lodge", "bounties",
+  "bestiary", "case", "investigation", "routines", "schedule", "check",
+]);
+
+function isMetaCommand(text) {
+  const first = text.toLowerCase().split(/\s+/)[0];
+  if (META_COMMANDS.has(first)) return true;
+  return /^(hints|equip|unequip|use)\s/i.test(text);
+}
+
+function updatePendingProse(text) {
+  const el = document.querySelector("#pending-turn .turn-prose");
+  if (!el) return;
+  el.classList.remove("system");
+  el.textContent = text;
+}
+
+async function submitActionStream(text) {
+  const res = await fetch("/api/action/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(apiErrorDetail(data, res.statusText));
+  }
+  if (!res.body) {
+    throw new Error("Streaming not supported in this browser.");
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let streamed = "";
+  let finalResult = null;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() || "";
+    for (const part of parts) {
+      const line = part.trim();
+      if (!line.startsWith("data:")) continue;
+      const msg = JSON.parse(line.slice(5).trim());
+      if (msg.type === "chunk") {
+        streamed += msg.text || "";
+        updatePendingProse(streamed);
+        scrollStoryToEnd();
+      } else if (msg.type === "done") {
+        finalResult = msg;
+      } else if (msg.type === "error") {
+        throw new Error(msg.detail || "Scene generation failed.");
+      }
+    }
+  }
+
+  if (!finalResult) {
+    throw new Error("Stream ended without a final scene.");
+  }
+  applyResult(finalResult);
+}
+
 /* ── Actions ── */
 function setBusy(on) {
   busy = on;
@@ -886,15 +954,20 @@ async function submitAction(text) {
   setBusy(true);
   appendPending(trimmed);
   try {
-    const result = await api("/api/action", {
-      method: "POST",
-      body: JSON.stringify({ text: trimmed }),
-    });
-    if (!result?.scene) {
-      clearPending();
-      appendSystem("No scene text returned. Check GEMINI_API_KEY and server logs.");
+    const useStream = !isMetaCommand(trimmed) && state?.session?.gemini_configured !== false;
+    if (useStream) {
+      await submitActionStream(trimmed);
+    } else {
+      const result = await api("/api/action", {
+        method: "POST",
+        body: JSON.stringify({ text: trimmed }),
+      });
+      if (!result?.scene) {
+        clearPending();
+        appendSystem("No scene text returned. Check GEMINI_API_KEY and server logs.");
+      }
+      applyResult(result);
     }
-    applyResult(result);
   } catch (err) {
     clearPending();
     appendSystem(err.message || String(err));

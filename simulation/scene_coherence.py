@@ -159,8 +159,11 @@ def is_dialogue_continuation(kind, player, action_ctx, journal):
 
 def build_conversation_ledger(player, journal, npc_id, action_ctx):
     """Recent exchange + locks for the focal NPC."""
+    from simulation.journal_summary import distant_context_block
+
+    distant = distant_context_block(player)
     if not npc_id or not journal:
-        return ""
+        return distant
 
     from storage import load
     npcs = load("characters/npcs.json", {})
@@ -205,7 +208,10 @@ def build_conversation_ledger(player, journal, npc_id, action_ctx):
     if speech:
         lines.append(f'- Protagonist says ONLY: "{speech}"')
 
-    return "\n".join(lines)
+    body = "\n".join(lines)
+    if distant:
+        return distant + "\n" + body
+    return body
 
 
 def stable_persona_block(npc):

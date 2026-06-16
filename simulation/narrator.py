@@ -25,7 +25,7 @@ from simulation.immersion_context import (
 )
 from simulation.novel_craft import CRAFT_CORE, craft_for_kind, narrative_outcome, token_budget_for_kind
 from simulation.generation_guardrails import guardrails_prompt_block, build_hard_constraints_block
-from simulation.gemini_client import generate_text
+from simulation.gemini_client import generate_text, generate_text_stream
 from storage import load
 
 DEBUG_TOKENS = os.environ.get("AISTORY_DEBUG_TOKENS", "").lower() in ("1", "true", "yes")
@@ -52,7 +52,8 @@ def _background_snippet(bg, focus_key):
     return f"  (private history — never recite): {val[:120]}"
 
 
-def _npc_line(npc, known, is_new, rel, tick, name_reveal=None, institutions=None, action_kind=None):
+def _npc_line(npc, known, is_new, rel, tick, name_reveal=None, institutions=None,
+              action_kind=None, player=None):
     nid = npc.get("id", "")
     pron = npc.get("pronouns", {})
     g_noun = gender_noun(npc)
@@ -107,8 +108,21 @@ def _npc_line(npc, known, is_new, rel, tick, name_reveal=None, institutions=None
     want_block = f"  {want_line}\n" if want_line else ""
     sched = schedule_hint(npc, None)
     sched_line = f"  {sched}\n" if sched else ""
+    lock = None
+    if player and known and not revealing:
+        lock = (player.get("known_npcs", {}).get(nid) or {}).get("narration_lock")
+    continuity_block = ""
+    if lock:
+        continuity_block = (
+            f"  APPEARANCE LOCK: {lock['appearance']}\n"
+            f"  VOICE LOCK: {lock['voice']}\n"
+            "  Do NOT redesign face, hair, or speech register.\n"
+        )
     if action_kind in DIALOGUE_KINDS:
-        voice_block = stable_persona_block(npc)
+        if lock:
+            voice_block = f"  Voice (fixed): {lock['voice']}\n"
+        else:
+            voice_block = stable_persona_block(npc)
     else:
         voice_block = f"  Voice: {speech_hint(persona, focus)}\n"
 
@@ -117,6 +131,7 @@ def _npc_line(npc, known, is_new, rel, tick, name_reveal=None, institutions=None
         f"{dead_line}"
         f"{gender_lock}"
         f"{role_lock}"
+        f"{continuity_block}"
         f"  Pronouns: {pron.get('subject')}/{pron.get('object')}/{pron.get('possessive')}\n"
         f"  Behaviour this beat: {cues[0] if cues else 'reserved'}\n"
         f"{_background_snippet(bg, bg_focus)}\n"
@@ -140,7 +155,7 @@ def _build_npc_context(focus_npcs, known_ids, new_ids, rels, tick, name_reveal, 
             rel["_impression_hint"] = imp.get("hint")
         lines.append(_npc_line(
             npc, nid in known_ids, nid in new_ids, rel, tick, name_reveal, institutions,
-            action_kind=action_kind,
+            action_kind=action_kind, player=player,
         ))
     return lines[0] + "\n\n" + crowd_note
 
@@ -199,14 +214,15 @@ def _join_prompt_sections(*parts):
     return "\n\n".join(p.strip() for p in parts if p and str(p).strip())
 
 
-def generate_scene(player_action, world, player, present_npcs,
-                   memories, rumors=None, new_npcs=None,
-                   known_ids=None, relationships=None, extra_directive=None,
-                   local_arc=None, tick=0, action_context=None,
-                   name_reveal=None, locals_know_player_name=False,
-                   crowd_note="", scene_event=None,
-                   immersion_block="",
-                   focal_npc_id=None, scene_place=None, hard_constraints=""):
+def assemble_scene_prompt(player_action, world, player, present_npcs,
+                          memories, rumors=None, new_npcs=None,
+                          known_ids=None, relationships=None, extra_directive=None,
+                          local_arc=None, tick=0, action_context=None,
+                          name_reveal=None, locals_know_player_name=False,
+                          crowd_note="", scene_event=None,
+                          immersion_block="",
+                          focal_npc_id=None, scene_place=None, hard_constraints=""):
+    """Build the narrator prompt; returns (prompt, token_budget, resolved_focal_id)."""
     known_ids = set(known_ids or [])
     new_ids = {n.get("id") for n in (new_npcs or [])}
     rels = relationships or {}
@@ -336,6 +352,28 @@ def generate_scene(player_action, world, player, present_npcs,
         "Write the scene now. Literary novel prose only — obey HARD CONSTRAINTS, "
         "CRAFT, SCENE MODE, and DO NOT REPEAT.",
     )
+    return prompt, token_budget, focal_npc_id
+
+
+def generate_scene(player_action, world, player, present_npcs,
+                   memories, rumors=None, new_npcs=None,
+                   known_ids=None, relationships=None, extra_directive=None,
+                   local_arc=None, tick=0, action_context=None,
+                   name_reveal=None, locals_know_player_name=False,
+                   crowd_note="", scene_event=None,
+                   immersion_block="",
+                   focal_npc_id=None, scene_place=None, hard_constraints="",
+                   on_prose_chunk=None):
+    prompt, token_budget, _focal_id = assemble_scene_prompt(
+        player_action, world, player, present_npcs,
+        memories, rumors=rumors, new_npcs=new_npcs,
+        known_ids=known_ids, relationships=relationships, extra_directive=extra_directive,
+        local_arc=local_arc, tick=tick, action_context=action_context,
+        name_reveal=name_reveal, locals_know_player_name=locals_know_player_name,
+        crowd_note=crowd_note, scene_event=scene_event,
+        immersion_block=immersion_block,
+        focal_npc_id=focal_npc_id, scene_place=scene_place, hard_constraints=hard_constraints,
+    )
 
     if DEBUG_TOKENS:
         print("\n===== TOKEN DEBUG =====")
@@ -343,4 +381,7 @@ def generate_scene(player_action, world, player, present_npcs,
         print("Model:", os.environ.get("GEMINI_MODEL", "gemini-3.5-flash"))
         print("======================\n")
 
-    return generate_text(prompt, max_tokens=token_budget, temperature=0.82, top_p=0.9)
+    gen_kwargs = dict(max_tokens=token_budget, temperature=0.82, top_p=0.9)
+    if on_prose_chunk:
+        return generate_text_stream(prompt, on_chunk=on_prose_chunk, **gen_kwargs)
+    return generate_text(prompt, **gen_kwargs)

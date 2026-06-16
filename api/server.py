@@ -265,6 +265,18 @@ def create_app():
         scene = generate_opening_scene()
         return _action_response("look around", scene)
 
+    def _is_meta_action(text):
+        first = text.lower().split()[0]
+        if first in {
+            "help", "?", "stats", "status", "sheet", "skills", "inventory", "inv",
+            "goals", "objectives", "map", "where", "journal", "bonds", "relationships",
+            "factions", "reputation", "guilds", "institutions", "lodge", "bounties",
+            "bestiary", "case", "investigation", "routines", "schedule", "check",
+        }:
+            return True
+        lower = text.lower()
+        return lower.startswith(("hints ", "equip ", "unequip ", "use "))
+
     @app.post("/api/action")
     def action(body: ActionBody):
         text = (body.text or "").strip()
@@ -274,12 +286,7 @@ def create_app():
         if text.lower() in ("quit", "exit"):
             return _action_response(text, "Session ended. Close the browser tab or keep exploring.")
 
-        meta_only = text.lower().split()[0] in {
-            "help", "?", "stats", "status", "sheet", "skills", "inventory", "inv",
-            "goals", "objectives", "map", "where", "journal", "bonds", "relationships",
-            "factions", "reputation", "guilds", "institutions", "lodge", "bounties",
-            "bestiary", "case", "investigation", "routines", "schedule", "check",
-        } or text.lower().startswith(("hints ", "equip ", "unequip ", "use "))
+        meta_only = _is_meta_action(text)
 
         if not meta_only and not api_key():
             raise HTTPException(
@@ -300,6 +307,66 @@ def create_app():
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
         return _action_response(text, scene, meta_only=meta_only, before=before)
+
+    @app.post("/api/action/stream")
+    def action_stream(body: ActionBody):
+        import json
+        import queue
+        import threading
+
+        from fastapi.responses import StreamingResponse
+
+        text = (body.text or "").strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="Empty action.")
+
+        if text.lower() in ("quit", "exit"):
+            return _action_response(text, "Session ended. Close the browser tab or keep exploring.")
+
+        meta_only = _is_meta_action(text)
+
+        if not meta_only and not api_key():
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Set GEMINI_API_KEY for roleplay actions. "
+                    "Create a .env file in the project root (see .env.example) "
+                    "or set the variable in Windows Environment Variables, then restart the server."
+                ),
+            )
+
+        player_before = load("player/player.json", {})
+        before = snapshot_for_delta(player_before)
+        events = queue.Queue()
+
+        def worker():
+            try:
+                def on_chunk(chunk):
+                    events.put({"type": "chunk", "text": chunk})
+
+                scene = process_player_action(text, on_prose_chunk=on_chunk)
+                payload = _action_response(text, scene, meta_only=meta_only, before=before)
+                payload["type"] = "done"
+                events.put(payload)
+            except Exception as exc:
+                events.put({"type": "error", "detail": str(exc)})
+            finally:
+                events.put(None)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+        def event_generator():
+            while True:
+                item = events.get()
+                if item is None:
+                    break
+                yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @app.get("/")
     def index():

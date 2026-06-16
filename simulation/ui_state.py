@@ -777,6 +777,7 @@ def snapshot_for_delta(player):
 
 def get_full_state():
     from game.undo import can_undo
+    from simulation.gemini_client import api_key
 
     player = load(PLAYER_FILE, {})
     if not player:
@@ -796,5 +797,8 @@ def get_full_state():
         "timeline": get_timeline_view(player),
         "story_history": get_story_history(player),
         "help": HELP_COMMANDS,
-        "session": {"can_undo": can_undo()},
+        "session": {
+            "can_undo": can_undo(),
+            "gemini_configured": bool(api_key()),
+        },
     }

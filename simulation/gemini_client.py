@@ -157,6 +157,100 @@ def _call_with_retries(client, model, prompt, *, cap, temperature, top_p):
     raise last_err
 
 
+def _generate_stream_once(client, model, prompt, *, cap, temperature, top_p):
+    return client.models.generate_content_stream(
+        model=model,
+        contents=prompt,
+        config=_generation_config(
+            model,
+            max_tokens=cap,
+            temperature=temperature,
+            top_p=top_p,
+        ),
+    )
+
+
+def generate_text_stream(prompt, *, temperature=0.78, top_p=0.88, max_tokens=None, on_chunk=None):
+    """Stream generated prose; invoke on_chunk for each text delta; return full text."""
+    from google.genai import errors as genai_errors
+
+    client = genai.Client(api_key=require_api_key())
+    token_cap = max_tokens or get_max_output_tokens()
+    models_to_try = [model_name()]
+    for m in FALLBACK_MODELS:
+        if m not in models_to_try:
+            models_to_try.append(m)
+
+    caps = (token_cap, min(token_cap * 2, 8192))
+    last_err = None
+
+    for model in models_to_try:
+        try:
+            for cap in caps:
+                parts = []
+                last_response = None
+                stream = _call_with_retries_stream(
+                    client, model, prompt, cap=cap, temperature=temperature, top_p=top_p,
+                )
+                for chunk in stream:
+                    last_response = chunk
+                    piece = _extract_text(chunk)
+                    if not piece:
+                        continue
+                    parts.append(piece)
+                    if on_chunk:
+                        on_chunk(piece)
+                text = "".join(parts).strip()
+                if not text:
+                    raise RuntimeError("Gemini returned an empty response.")
+                if _looks_truncated(text, last_response):
+                    if cap < caps[-1]:
+                        continue
+                    raise RuntimeError(
+                        "Gemini response was cut off mid-sentence. "
+                        "Try raising GEMINI_MAX_OUTPUT_TOKENS (e.g. 8192)."
+                    )
+                return text
+        except genai_errors.ClientError as e:
+            last_err = e
+            if getattr(e, "status_code", None) == 404:
+                continue
+            if _retryable_api_error(e):
+                continue
+            raise
+        except genai_errors.ServerError as e:
+            last_err = e
+            if _retryable_api_error(e):
+                continue
+            raise
+
+    hint = (
+        f"Tried models: {', '.join(models_to_try)}. "
+        f"Set GEMINI_MODEL to a model your key supports "
+        f"(see https://ai.google.dev/gemini-api/docs/models)."
+    )
+    if last_err:
+        raise RuntimeError(f"{last_err}. {hint}") from last_err
+    raise RuntimeError(hint)
+
+
+def _call_with_retries_stream(client, model, prompt, *, cap, temperature, top_p):
+    """Retry transient Gemini overload / rate-limit errors with backoff (streaming)."""
+    last_err = None
+    for attempt in range(API_RETRY_ATTEMPTS):
+        try:
+            return _generate_stream_once(
+                client, model, prompt, cap=cap, temperature=temperature, top_p=top_p,
+            )
+        except Exception as e:
+            last_err = e
+            if not _retryable_api_error(e) or attempt >= API_RETRY_ATTEMPTS - 1:
+                raise
+            delay = min(API_RETRY_BASE_SEC * (2 ** attempt), 30.0)
+            time.sleep(delay)
+    raise last_err
+
+
 def generate_text(prompt, *, temperature=0.78, top_p=0.88, max_tokens=None):
     """Send a single prompt; return complete generated prose."""
     from google.genai import errors as genai_errors

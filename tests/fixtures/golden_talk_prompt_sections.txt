@@ -1,0 +1,10 @@
+# Ordered markers that must appear in talk-scene prompts (assembly regression guard).
+VOICE:
+PROTAGONIST:
+THIS BEAT: The protagonist does NOT speak this beat unless they are only observing or moving.
+FOCAL PERSON — Father Hale
+GENERATION GUARDRAILS (simulation wins over improvisation):
+HARD CONSTRAINTS (override everything above):
+- LOCATION LOCK: Temple Row — the heavy door
+- FOCAL PERSON THIS BEAT: id=p1
+Write the scene now. Literary novel prose only — obey HARD CONSTRAINTS,
