@@ -18,12 +18,23 @@ TARGET_KINDS = frozenset({
     "steal", "ask_about", "investigate", "accuse", "blackmail", "guild",
 })
 
-# First names that are common English words — skip first-name-only hits.
+# First names that are common English words — require explicit address, not substring luck.
 _AMBIGUOUS_FIRST_NAMES = frozenset({
     "hope", "will", "grace", "joy", "faith", "mark", "rose", "art", "pat",
     "bill", "sue", "may", "spring", "summer", "dawn", "charity", "mercy",
     "honor", "glory", "sage", "storm", "rain", "snow", "river", "brook",
 })
+
+
+def _ambiguous_name_is_addressed(name_l, text_lower):
+    """True when an ambiguous given name is clearly used as an addressee, not a common word."""
+    return bool(re.search(
+        rf"\b(?:talk|speak|ask|find|greet|tell|approach|nod|turn|wave|call|look)\b[^.]*\b{re.escape(name_l)}\b"
+        rf"|\bto\s+{re.escape(name_l)}\b"
+        rf"|\bat\s+{re.escape(name_l)}\b"
+        rf"|\b{re.escape(name_l)}\s*[,!?]",
+        text_lower,
+    ))
 
 
 def _role_tokens_in_text(action, present):
@@ -59,17 +70,15 @@ def find_npc_by_name_in_text(text, npcs, player):
         name_l = name.lower()
         parts = name.split()
         if len(parts) == 1 and name_l in _AMBIGUOUS_FIRST_NAMES:
-            if not re.search(
-                rf"\b(?:talk|speak|ask|find|greet|tell)\s+(?:to\s+|with\s+)?{re.escape(name_l)}\b",
-                lower,
-            ):
+            if not _ambiguous_name_is_addressed(name_l, lower):
                 continue
         if re.search(rf"\b{re.escape(name_l)}\b", lower):
             hits.append(npc)
             continue
-        first = name.split()[0].lower()
+        first = parts[0].lower()
         if first in _AMBIGUOUS_FIRST_NAMES:
-            continue
+            if not _ambiguous_name_is_addressed(first, lower):
+                continue
         if len(first) > 2 and re.search(rf"\b{re.escape(first)}\b", lower):
             hits.append(npc)
     if len(hits) == 1:

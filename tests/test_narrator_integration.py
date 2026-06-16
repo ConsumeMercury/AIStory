@@ -76,6 +76,91 @@ def test_ambiguous_name_hope_not_matched():
     assert hit is None
 
 
+def test_ambiguous_name_hope_vocative():
+    npcs = {"h1": _npc("h1", name="Hope", role="merchant")}
+    player = {"known_npcs": {"h1": {"name_known": True}}, "scene_focus": None}
+    hit = find_npc_by_name_in_text("Hope, please wait", npcs, player)
+    assert hit is not None
+    assert hit["id"] == "h1"
+
+
+def test_ambiguous_name_hope_turn_to():
+    npcs = {"h1": _npc("h1", name="Hope", role="merchant")}
+    player = {"known_npcs": {"h1": {"name_known": True}}, "scene_focus": None}
+    hit = find_npc_by_name_in_text("I turn to Hope", npcs, player)
+    assert hit is not None
+    assert hit["id"] == "h1"
+
+
+def test_ambiguous_name_hope_at():
+    npcs = {"h1": _npc("h1", name="Hope", role="merchant")}
+    player = {"known_npcs": {"h1": {"name_known": True}}, "scene_focus": None}
+    hit = find_npc_by_name_in_text("I nod at Hope", npcs, player)
+    assert hit is not None
+    assert hit["id"] == "h1"
+
+
+def test_focal_mismatch_soft_in_production(monkeypatch, caplog):
+    import logging
+    from simulation.narrator import generate_scene
+
+    monkeypatch.delenv("AISTORY_STRICT", raising=False)
+    monkeypatch.delenv("AISTORY_DEBUG_TOKENS", raising=False)
+    captured = {}
+
+    def fake_generate_text(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return "scene"
+
+    monkeypatch.setattr("simulation.narrator.generate_text", fake_generate_text)
+
+    npc = _npc("p1", role="priest", name="Father Hale")
+    player = {"journal": [], "known_npcs": {"p1": {"name_known": True}}, "area": "x", "location": "city"}
+    world = {"world_name": "T", "day": 1, "time_of_day": "day", "season": "", "weather": "Clear"}
+
+    with caplog.at_level(logging.WARNING, logger="simulation.narrator"):
+        generate_scene(
+            player_action="talk",
+            world=world,
+            player=player,
+            present_npcs=[npc],
+            memories=[],
+            known_ids={"p1"},
+            action_context={"kind": "talk"},
+            focal_npc_id="wrong_id",
+            scene_place="Somewhere",
+            hard_constraints="HARD CONSTRAINTS",
+        )
+
+    assert any("Focal id mismatch" in r.message for r in caplog.records)
+    assert "FOCAL PERSON" in captured["prompt"]
+    assert "Father Hale" in captured["prompt"]
+
+
+def test_focal_mismatch_strict_raises(monkeypatch):
+    from simulation.narrator import generate_scene
+
+    monkeypatch.setenv("AISTORY_STRICT", "1")
+    monkeypatch.setattr("simulation.narrator.generate_text", lambda *a, **k: "x")
+
+    npc = _npc("p1", role="priest", name="Father Hale")
+    player = {"journal": [], "known_npcs": {"p1": {"name_known": True}}, "area": "x", "location": "city"}
+    world = {"world_name": "T", "day": 1, "time_of_day": "day", "season": "", "weather": "Clear"}
+
+    with pytest.raises(ValueError, match="focal_npc_id"):
+        generate_scene(
+            player_action="talk",
+            world=world,
+            player=player,
+            present_npcs=[npc],
+            memories=[],
+            action_context={"kind": "talk"},
+            focal_npc_id="wrong_id",
+            scene_place="Somewhere",
+            hard_constraints="HARD CONSTRAINTS",
+        )
+
+
 def test_dynamic_role_acolyte_in_present():
     from simulation.target_resolution import action_mentions_role_or_descriptor
 

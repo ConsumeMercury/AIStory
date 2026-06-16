@@ -2,6 +2,7 @@
 Novel-style scene generation — one person, one moment, literary prose.
 """
 
+import logging
 import os
 
 from generation.descriptor_generator import short_descriptor, appearance_notes, gender_noun, gender_label as npc_gender_label
@@ -28,6 +29,8 @@ from simulation.gemini_client import generate_text
 from storage import load
 
 DEBUG_TOKENS = os.environ.get("AISTORY_DEBUG_TOKENS", "").lower() in ("1", "true", "yes")
+
+log = logging.getLogger(__name__)
 
 _BACKGROUND_FOCUS = ("childhood", "formative_event", "current_situation", "belief", "hope", "secret")
 
@@ -225,9 +228,13 @@ def generate_scene(player_action, world, player, present_npcs,
 
     focal_npc = present_npcs[0] if present_npcs else None
     if focal_npc_id and focal_npc and focal_npc.get("id") != focal_npc_id:
-        raise ValueError(
-            f"focal_npc_id {focal_npc_id!r} does not match present_npcs[0] {focal_npc.get('id')!r}"
+        msg = (
+            f"focal_npc_id {focal_npc_id!r} != present_npcs[0] {focal_npc.get('id')!r}"
         )
+        if DEBUG_TOKENS or os.environ.get("AISTORY_STRICT", "").lower() in ("1", "true", "yes"):
+            raise ValueError(msg)
+        log.warning("Focal id mismatch (using cast decision): %s", msg)
+        focal_npc_id = focal_npc.get("id")
 
     npc_block = _build_npc_context(
         present_npcs, known_ids, new_ids, rels, tick, name_reveal, player, crowd_note,
