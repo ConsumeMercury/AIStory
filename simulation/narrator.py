@@ -23,7 +23,7 @@ from simulation.immersion_context import (
     institution_affiliation, npc_active_want,
 )
 from simulation.novel_craft import CRAFT_CORE, craft_for_kind, narrative_outcome, token_budget_for_kind
-from simulation.generation_guardrails import guardrails_prompt_block
+from simulation.generation_guardrails import guardrails_prompt_block, build_hard_constraints_block
 from simulation.gemini_client import generate_text
 from storage import load
 
@@ -192,13 +192,18 @@ def _novel_player_block(player, locals_know_name, action_kind=None, has_journal=
     )
 
 
+def _join_prompt_sections(*parts):
+    return "\n\n".join(p.strip() for p in parts if p and str(p).strip())
+
+
 def generate_scene(player_action, world, player, present_npcs,
                    memories, rumors=None, new_npcs=None,
                    known_ids=None, relationships=None, extra_directive=None,
                    local_arc=None, tick=0, action_context=None,
                    name_reveal=None, locals_know_player_name=False,
                    crowd_note="", scene_event=None,
-                   immersion_block=""):
+                   immersion_block="",
+                   focal_npc_id=None, scene_place=None, hard_constraints=""):
     known_ids = set(known_ids or [])
     new_ids = {n.get("id") for n in (new_npcs or [])}
     rels = relationships or {}
@@ -214,26 +219,21 @@ def generate_scene(player_action, world, player, present_npcs,
     aid = player.get("area")
     areas = load("world/areas.json", {})
     area = areas.get(aid, {}) if aid else {}
-    place = place_label(player, area) or player.get("location", "")
-    if area.get("atmosphere") and kind in ("explore", "travel", "rest") and not has_journal:
+    place = scene_place or place_label(player, area) or player.get("location", "")
+    if not scene_place and area.get("atmosphere") and kind in ("explore", "travel", "rest") and not has_journal:
         place += " — " + (area["atmosphere"][0] if area["atmosphere"] else "")
 
-    focus_npc_id = None
-    ctx = action_context or {}
-    if ctx.get("travel_failed") or ctx.get("approach_failed"):
-        focus_npc_id = None
-    elif present_npcs:
-        focus_npc_id = present_npcs[0].get("id")
-    elif ctx.get("target_id"):
-        focus_npc_id = ctx.get("target_id")
-    elif kind not in ("investigate", "explore", "observe", "examine", "approach", "rest", "travel"):
-        focus_npc_id = player.get("scene_focus")
+    focal_npc = present_npcs[0] if present_npcs else None
+    if focal_npc_id and focal_npc and focal_npc.get("id") != focal_npc_id:
+        raise ValueError(
+            f"focal_npc_id {focal_npc_id!r} does not match present_npcs[0] {focal_npc.get('id')!r}"
+        )
 
     npc_block = _build_npc_context(
         present_npcs, known_ids, new_ids, rels, tick, name_reveal, player, crowd_note,
         action_kind=kind,
     )
-    ledger_block = build_conversation_ledger(player, journal, focus_npc_id, action_context)
+    ledger_block = build_conversation_ledger(player, journal, focal_npc_id, action_context)
     inv_facts = build_inventory_facts(player, action_context or {})
     facts_parts = [p for p in (inv_facts,) if p]
     if action_context:
@@ -302,35 +302,33 @@ def generate_scene(player_action, world, player, present_npcs,
     craft_kind = craft_for_kind(kind)
     token_budget = token_budget_for_kind(kind)
 
-    prompt = f"""{CRAFT_CORE}
+    hard_block = hard_constraints or build_hard_constraints_block(
+        focal_npc_id, focal_npc, place, action_context,
+    )
 
-{craft_kind}
-
-{length_block}
-{mode_block}
-
-{continuity_block}
-{ledger_block}
-{scene_facts}
-
-SCENE:
-Setting: {setting}. Place: {place}.
-{arc}
-{event_block}
-{name_rule}
-
-PROTAGONIST: {player_block}
-
-THIS BEAT: {action_block}
-{('Note: ' + extra_directive) if extra_directive else ''}
-
-{npc_block}
-
-{avoid_block}
-{guardrails_prompt_block()}
-{immersion}
-
-Write the scene now. Literary novel prose only — obey CRAFT, SCENE MODE, and DO NOT REPEAT."""
+    prompt = _join_prompt_sections(
+        CRAFT_CORE,
+        craft_kind,
+        length_block,
+        mode_block,
+        continuity_block,
+        ledger_block,
+        scene_facts,
+        f"SCENE:\nSetting: {setting}. Place: {place}.",
+        arc,
+        event_block,
+        name_rule,
+        f"PROTAGONIST: {player_block}",
+        f"THIS BEAT: {action_block}",
+        f"Note: {extra_directive}" if extra_directive else "",
+        npc_block,
+        avoid_block,
+        guardrails_prompt_block(),
+        immersion,
+        hard_block,
+        "Write the scene now. Literary novel prose only — obey HARD CONSTRAINTS, "
+        "CRAFT, SCENE MODE, and DO NOT REPEAT.",
+    )
 
     if DEBUG_TOKENS:
         print("\n===== TOKEN DEBUG =====")

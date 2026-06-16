@@ -130,7 +130,7 @@ def resolve_target_and_absence(action, player, present, npcs, action_ctx, world,
         )
         if resolved:
             action_ctx["target_id"] = resolved["id"]
-        elif not action_mentions_role_or_descriptor(action):
+        elif not action_mentions_role_or_descriptor(action, present=present):
             focus = player.get("scene_focus")
             if focus and focus in present_ids:
                 action_ctx["target_id"] = focus

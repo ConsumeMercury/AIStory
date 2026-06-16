@@ -17,16 +17,23 @@ CAPTURED = []
 
 
 def _mock_generate_scene(**kwargs):
+    action_context = kwargs.get("action_context") or {}
+    present = kwargs.get("present_npcs") or []
+    focal_npc_id = kwargs.get("focal_npc_id")
     CAPTURED.append({
         "action": kwargs.get("player_action"),
-        "kind": (kwargs.get("action_context") or {}).get("kind"),
-        "focus_ids": [n.get("id") for n in (kwargs.get("present_npcs") or [])],
-        "focus_genders": [n.get("gender") for n in (kwargs.get("present_npcs") or [])],
-        "focus_status": [n.get("status") for n in (kwargs.get("present_npcs") or [])],
-        "target_id": (kwargs.get("action_context") or {}).get("target_id"),
-        "combat_fatal": (kwargs.get("action_context") or {}).get("combat_fatal"),
-        "acquired": (kwargs.get("action_context") or {}).get("acquired_item"),
-        "directive_head": ((kwargs.get("action_context") or {}).get("story_directive") or "")[:200],
+        "kind": action_context.get("kind"),
+        "focus_ids": [n.get("id") for n in present],
+        "focus_genders": [n.get("gender") for n in present],
+        "focus_status": [n.get("status") for n in present],
+        "target_id": action_context.get("target_id"),
+        "focal_npc_id": focal_npc_id,
+        "ledger_focal_id": focal_npc_id,
+        "scene_place": kwargs.get("scene_place"),
+        "travel_failed": action_context.get("travel_failed"),
+        "combat_fatal": action_context.get("combat_fatal"),
+        "acquired": action_context.get("acquired_item"),
+        "directive_head": (action_context.get("story_directive") or "")[:200],
         "extra_head": (kwargs.get("extra_directive") or "")[:120],
         "crowd": (kwargs.get("crowd_note") or "")[:80],
     })
@@ -242,6 +249,37 @@ def audit_withdraw_clears_focus():
     _assert(player.get("scene_focus") is None, "withdraw should clear scene_focus")
 
 
+def audit_focal_id_integrity():
+    """focal_npc_id passed to narrator must match cast and ledger."""
+    from simulation.generation_guardrails import audit_capture_anomalies
+    from storage import load
+
+    _reset_player_baseline()
+    _run_sequence(["look around", "talk to someone"])
+    player = load("player/player.json", {})
+    npcs = load("characters/npcs.json", {})
+    for cap in CAPTURED:
+        warnings = audit_capture_anomalies(cap, player, npcs)
+        _assert(
+            not any("focal_npc_id" in w and "!=" in w for w in warnings),
+            f"focal/ledger mismatch: {warnings} cap={cap}",
+        )
+        if cap.get("focus_ids"):
+            _assert(
+                cap.get("focal_npc_id") == cap["focus_ids"][0],
+                f"focal_npc_id must equal present_npcs[0]: {cap}",
+            )
+
+
+def audit_travel_failed_empty_cast():
+    _reset_player_baseline()
+    _run_sequence(["go to the moon"])
+    last = CAPTURED[-1]
+    _assert(last.get("travel_failed") or "not on the travel map" in (last.get("extra_head") or "").lower(),
+            "expected travel failure")
+    _assert(len(last.get("focus_ids") or []) == 0, f"travel failed should have empty cast: {last}")
+
+
 def main():
     tests = [
         ("explore_anchor", audit_explore_anchor),
@@ -252,6 +290,8 @@ def main():
         ("non_fatal_focal", audit_non_fatal_no_ghost_speaker),
         ("talk_priest_overrides_focus", audit_talk_priest_overrides_focus),
         ("withdraw_clears_focus", audit_withdraw_clears_focus),
+        ("focal_id_integrity", audit_focal_id_integrity),
+        ("travel_failed_empty_cast", audit_travel_failed_empty_cast),
     ]
     failed = []
     for name, fn in tests:

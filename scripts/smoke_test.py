@@ -63,7 +63,7 @@ def test_scene_cast():
     if not present:
         return
     ctx = {"kind": "explore", "target_id": None}
-    focus, note = select_scene_cast(present, player, ctx)
+    focus, note, focal_id = select_scene_cast(present, player, ctx)
     assert focus == [] or len(focus) <= 1
     assert note  # non-empty crowd guidance
 
@@ -481,7 +481,7 @@ def test_scene_cast_absent():
         "target_id": None,
         "absent_npc": {"name": "Aethar", "descriptor": "the dockhand"},
     }
-    focus, note = select_scene_cast(present, player, ctx)
+    focus, note, focal_id = select_scene_cast(present, player, ctx)
     assert focus == []
     assert "NOT" in note
 

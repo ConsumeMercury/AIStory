@@ -24,8 +24,9 @@ from simulation.scene_coherence import (
     place_label,
     DIALOGUE_KINDS,
 )
-from simulation.local_places import resolve_local_movement, build_place_lock
+from simulation.local_places import resolve_local_movement
 from simulation.target_resolution import resolve_investigate_target
+from simulation.generation_guardrails import build_hard_constraints_block
 from simulation.npc_memory_engine import record_player_action
 from simulation.skill_check import run_action_check, apply_check_costs
 from simulation.player_identity import (
@@ -687,12 +688,15 @@ def process_player_action(action):
                 save(PLAYER_FILE, player)
         extra_directive = directive or err or extra_directive
 
-    focus_npcs, crowd_note = select_scene_cast(present, player, action_ctx)
+    focus_npcs, crowd_note, focal_id = select_scene_cast(present, player, action_ctx)
+    with state_lock():
+        save(PLAYER_FILE, player)
     combat_snap = action_ctx.get("combat_snapshot")
     if kind == "attack" and combat_snap:
         snap_id = combat_snap.get("id")
         if not any(n.get("id") == snap_id for n in focus_npcs):
             focus_npcs = [combat_snap]
+            focal_id = snap_id
             crowd_note = (
                 "Others nearby are background only — do NOT give them dialogue this beat."
             )
@@ -730,16 +734,9 @@ def process_player_action(action):
     rels_toward_player = {nid: relationships.get(nid, {}).get("player", {}) for nid in focus_id_list}
 
     immersion_block = _immersion_block(kind, player, world, action_ctx, rumors, events, action)
-    areas_for_place = load(AREAS_FILE, {})
-    area_for_place = areas_for_place.get(player.get("area"), {})
-    place_lock = build_place_lock(player, area_for_place, action_ctx)
-    if place_lock:
-        immersion_block = (
-            (immersion_block + "\n\n" + place_lock).strip() if immersion_block else place_lock
-        )
     rival_note = rival_directive(player, npcs)
     if rival_note:
-        immersion_block = (immersion_block + "\n\n" + rival_note).strip()
+        immersion_block = (immersion_block + "\n\n" + rival_note).strip() if immersion_block else rival_note
 
     area_arc = arc_for_area(player.get("area")) or arc_for_city(player.get("location"))
     if kind not in ("ask_name", "talk", "withdraw", "attack", "confess", "search"):
@@ -757,6 +754,21 @@ def process_player_action(action):
                 intro = area_intro_directive(area_arrival)
                 extra_directive = ((extra_directive or "") + " " + intro).strip()
             save(PLAYER_FILE, player)
+
+    areas_for_place = load(AREAS_FILE, {})
+    area_for_place = areas_for_place.get(player.get("area"), {})
+    scene_place = place_label(player, area_for_place)
+    if (
+        area_for_place.get("atmosphere")
+        and kind in ("explore", "travel", "rest")
+        and not (player.get("journal"))
+    ):
+        scene_place += " — " + (area_for_place["atmosphere"][0] if area_for_place["atmosphere"] else "")
+
+    focal_npc = focus_npcs[0] if focus_npcs else None
+    hard_constraints = build_hard_constraints_block(
+        focal_id, focal_npc, scene_place, action_ctx,
+    )
 
     scene = get_narrator().generate_scene(
         player_action=action,
@@ -777,6 +789,9 @@ def process_player_action(action):
         crowd_note=crowd_note,
         scene_event=scene_event,
         immersion_block=immersion_block,
+        focal_npc_id=focal_id,
+        scene_place=scene_place,
+        hard_constraints=hard_constraints,
     )
 
     if name_reveal:

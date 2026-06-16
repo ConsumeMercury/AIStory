@@ -88,9 +88,9 @@ def _score_npc(npc, player, action_ctx, known, institutions=None):
 
 def select_scene_cast(present, player, action_ctx, max_focus=1):
     """
-    Returns (focus_list, crowd_note).
+    Returns (focus_list, crowd_note, focal_id).
     focus_list: NPCs the narrator may describe in detail (usually one).
-    crowd_note: prose hint about undifferentiated background presence.
+    focal_id: authoritative simulation decision for who is focal — pass to narrator verbatim.
     """
     absent = action_ctx.get("absent_npc")
     if absent:
@@ -99,10 +99,10 @@ def select_scene_cast(present, player, action_ctx, max_focus=1):
             f"{label} is NOT in this scene. "
             "Do NOT invent their dialogue or presence — show the protagonist looking, "
             "calling out, or finding no answer."
-        )
+        ), None
 
     if not present:
-        return [], "You are alone here."
+        return [], "You are alone here.", None
 
     present_ids = {n["id"] for n in present}
     tid = action_ctx.get("target_id")
@@ -120,33 +120,35 @@ def select_scene_cast(present, player, action_ctx, max_focus=1):
             "NO MOVEMENT — the protagonist stays where they were. "
             "Do NOT describe entering new buildings, crossing districts, or meeting strangers. "
             "One short beat of frustration or re-orientation only."
-        )
+        ), None
 
     if kind == "investigate" and not action_ctx.get("target_id"):
         return [], (
             "Environment-only investigation. Describe place, objects, sounds, contradictions. "
             "Do NOT invent new named NPCs (no priests, clerks, or strangers with dialogue). "
             "Background crowd is faceless — no speeches."
-        )
+        ), None
 
     if kind in ("explore", "rest", "travel", "observe", "approach") and not action_ctx.get("target_id"):
         if kind == "find":
             pass  # find always wants a person
         elif len(present) == 1 and kind not in ("travel", "approach"):
-            return present[:1], "No one else of note."
+            fid = present[0]["id"]
+            return present[:1], "No one else of note.", fid
         elif kind == "approach" and player.get("scene_subplace"):
             return [], (
                 f"Local movement to {(player.get('scene_subplace') or {}).get('label', 'a nearby spot')}. "
                 "Place and atmosphere only — no focal NPC unless already in conversation."
-            )
+            ), None
         return [], (
             f"The {kind} action is about place and atmosphere. "
             f"Do NOT introduce or describe individual strangers. "
             f"There are people in the distance — indistinct, unnamed, unimportant."
-        )
+        ), None
 
     ranked = sorted(present, key=lambda n: _score_npc(n, player, action_ctx, known, institutions), reverse=True)
     focus = ranked[:max_focus]
+    focal_id = focus[0]["id"] if focus else None
 
     others = len(present) - len(focus)
     if others <= 0:
@@ -157,7 +159,7 @@ def select_scene_cast(present, player, action_ctx, max_focus=1):
             f"do NOT describe them, name them, or give them gestures or dialogue. "
             f"They are faceless crowd noise."
         )
-    return focus, crowd
+    return focus, crowd, focal_id
 
 
 def pick_name_target(player, present, action):

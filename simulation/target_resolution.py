@@ -18,6 +18,30 @@ TARGET_KINDS = frozenset({
     "steal", "ask_about", "investigate", "accuse", "blackmail", "guild",
 })
 
+# First names that are common English words — skip first-name-only hits.
+_AMBIGUOUS_FIRST_NAMES = frozenset({
+    "hope", "will", "grace", "joy", "faith", "mark", "rose", "art", "pat",
+    "bill", "sue", "may", "spring", "summer", "dawn", "charity", "mercy",
+    "honor", "glory", "sage", "storm", "rain", "snow", "river", "brook",
+})
+
+
+def _role_tokens_in_text(action, present):
+    """True if action mentions a role token from someone actually present."""
+    if not action or not present:
+        return False
+    text = action.lower()
+    for npc in present:
+        role = (npc.get("role") or "").replace("_", " ")
+        for token in role.split():
+            if len(token) >= 4 and re.search(rf"\b{re.escape(token)}\b", text):
+                return True
+        occ = (npc.get("occupation") or "").replace("_", " ")
+        for token in occ.split():
+            if len(token) >= 4 and token != role and re.search(rf"\b{re.escape(token)}\b", text):
+                return True
+    return False
+
 
 def find_npc_by_name_in_text(text, npcs, player):
     """Match a known NPC name mentioned in player text."""
@@ -32,12 +56,22 @@ def find_npc_by_name_in_text(text, npcs, player):
         name = (npc.get("name") or "").strip()
         if not name or not known.get(nid, {}).get("name_known"):
             continue
-        if name.lower() in lower:
+        name_l = name.lower()
+        parts = name.split()
+        if len(parts) == 1 and name_l in _AMBIGUOUS_FIRST_NAMES:
+            if not re.search(
+                rf"\b(?:talk|speak|ask|find|greet|tell)\s+(?:to\s+|with\s+)?{re.escape(name_l)}\b",
+                lower,
+            ):
+                continue
+        if re.search(rf"\b{re.escape(name_l)}\b", lower):
             hits.append(npc)
-        else:
-            first = name.split()[0].lower()
-            if len(first) > 2 and re.search(rf"\b{re.escape(first)}\b", lower):
-                hits.append(npc)
+            continue
+        first = name.split()[0].lower()
+        if first in _AMBIGUOUS_FIRST_NAMES:
+            continue
+        if len(first) > 2 and re.search(rf"\b{re.escape(first)}\b", lower):
+            hits.append(npc)
     if len(hits) == 1:
         return hits[0]
     if len(hits) > 1:
@@ -49,10 +83,12 @@ def find_npc_by_name_in_text(text, npcs, player):
     return None
 
 
-def action_mentions_role_or_descriptor(action):
+def action_mentions_role_or_descriptor(action, present=None):
     if not action:
         return False
     if ROLE_HINT.search(action):
+        return True
+    if present and _role_tokens_in_text(action, present):
         return True
     return bool(re.search(r"\bred[\s-]?hair|\bgrey[\s-]?hair|\bauburn\b", action, re.I))
 
@@ -114,7 +150,7 @@ def resolve_action_target(action, player, present, npcs=None, kind="general"):
             return n
 
     focus_id = player.get("scene_focus")
-    has_role_hint = action_mentions_role_or_descriptor(action)
+    has_role_hint = action_mentions_role_or_descriptor(action, present=present)
     if focus_id and not has_role_hint:
         for n in present:
             if n["id"] == focus_id:
@@ -138,6 +174,6 @@ def resolve_investigate_target(action, player, present):
 
     if not present or not action:
         return None
-    if not action_mentions_role_or_descriptor(action):
+    if not action_mentions_role_or_descriptor(action, present=present):
         return None
     return match_npc_by_description(action, present)

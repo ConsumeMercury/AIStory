@@ -3,6 +3,8 @@ Central checklist for narration guardrails — used in prompts and offline audit
 Keeps simulation facts and Gemini prose aligned.
 """
 
+from generation.descriptor_generator import short_descriptor
+
 GUARDRAIL_RULES = (
     "FOCUS: Only the focal person in SCENE FACTS may speak with named dialogue.",
     "ABSENCE: If someone is absent, show empty result — no invented dialogue from them.",
@@ -25,6 +27,39 @@ def guardrails_prompt_block():
     return "\n".join(lines)
 
 
+def build_hard_constraints_block(focal_npc_id, focal_npc, scene_place, action_context=None):
+    """
+    Final pre-write constraints — location, movement, and focal identity.
+    Simulation passes these explicitly; the narrator must not re-derive them.
+    """
+    ctx = action_context or {}
+    lines = ["HARD CONSTRAINTS (override everything above):"]
+    if scene_place:
+        lines.append(
+            f"- LOCATION LOCK: {scene_place}. "
+            "The protagonist is HERE — do NOT move them to another building or district."
+        )
+    if ctx.get("travel_failed") or ctx.get("approach_failed"):
+        lines.append(
+            "- NO MOVEMENT occurred this beat. Do NOT describe entering new rooms or traveling."
+        )
+    if focal_npc_id and focal_npc:
+        known_name = focal_npc.get("name")
+        label = known_name or short_descriptor(focal_npc)
+        role = (focal_npc.get("role") or "stranger").replace("_", " ")
+        lines.append(
+            f"- FOCAL PERSON THIS BEAT: id={focal_npc_id} | {label} ({role}) — "
+            "the ONLY character who may speak with dialogue. "
+            "The conversation ledger below applies to this same id."
+        )
+    else:
+        lines.append(
+            "- NO FOCAL PERSON this beat — no named NPC dialogue. "
+            "Background crowd is faceless."
+        )
+    return "\n".join(lines)
+
+
 def audit_capture_anomalies(capture, player, npcs):
     """
     Return list of human-readable warnings for a mocked generate_scene capture.
@@ -35,7 +70,19 @@ def audit_capture_anomalies(capture, player, npcs):
     kind = ctx.get("kind")
     target_id = ctx.get("target_id")
     focus_ids = ctx.get("focus_ids") or []
+    focal_npc_id = ctx.get("focal_npc_id")
+    ledger_focal_id = ctx.get("ledger_focal_id")
     action = (ctx.get("action") or "").lower()
+
+    if focal_npc_id and focus_ids and focal_npc_id != focus_ids[0]:
+        warnings.append(
+            f"focal_npc_id {focal_npc_id!r} != present_npcs[0] {focus_ids[0]!r}"
+        )
+
+    if focal_npc_id and ledger_focal_id and focal_npc_id != ledger_focal_id:
+        warnings.append(
+            f"ledger built for {ledger_focal_id!r} but focal_npc_id is {focal_npc_id!r}"
+        )
 
     if ctx.get("travel_failed") and focus_ids:
         warnings.append("travel_failed but cast still has focal NPCs")
