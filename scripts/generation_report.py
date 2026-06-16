@@ -323,14 +323,13 @@ def main():
         from simulation.gemini_client import require_api_key
         require_api_key()
     else:
-        from unittest.mock import patch
-        mock = patch(
-            "simulation.story_loop.generate_scene",
-            return_value=(
-                "You stand at the docks. Rain on the pilings. She watches you, "
-                "a scholar in grey wool. (offline mock scene)"
-            ),
+        from unittest.mock import MagicMock, patch
+        mock_narr = MagicMock()
+        mock_narr.generate_scene.return_value = (
+            "You stand at the docks. Rain on the pilings. She watches you, "
+            "a scholar in grey wool. (offline mock scene)"
         )
+        mock = patch("simulation.story_loop.get_narrator", return_value=mock_narr)
         mock.start()
 
     backups = backup_saves()

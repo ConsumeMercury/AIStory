@@ -42,6 +42,11 @@ async def lifespan(app):
     simulation_runner.stop()
 
 
+def _cors_origins():
+    raw = os.environ.get("AISTORY_CORS_ORIGINS", "http://127.0.0.1:8765,http://localhost:8765")
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+
 def create_app():
     from fastapi import FastAPI, HTTPException
     from fastapi.middleware.cors import CORSMiddleware
@@ -95,9 +100,9 @@ def create_app():
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=_cors_origins(),
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_headers=["Content-Type"],
     )
 
     class ActionBody(BaseModel):
@@ -110,6 +115,62 @@ def create_app():
         appearance: str = ""
         attire: str = ""
         motivation: str = ""
+
+    class SaveSlotBody(BaseModel):
+        label: str = ""
+
+    @app.get("/api/saves")
+    def list_save_slots():
+        from game.save_slots import list_slots
+        return {"slots": list_slots()}
+
+    @app.post("/api/saves/{slot_id}")
+    def create_save_slot(slot_id: str, body: SaveSlotBody = SaveSlotBody()):
+        from game.save_slots import save_slot
+        from game.state_context import state_lock
+        try:
+            with state_lock():
+                meta = save_slot(slot_id, label=body.label or None)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "slot": slot_id, "meta": meta}
+
+    @app.post("/api/saves/{slot_id}/load")
+    def load_save_slot(slot_id: str):
+        from game.save_slots import load_slot
+        from simulation.world_patch import ensure_world_extensions
+        try:
+            load_slot(slot_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        ensure_world_extensions()
+        return {"ok": True, "state": get_full_state()}
+
+    @app.delete("/api/saves/{slot_id}")
+    def remove_save_slot(slot_id: str):
+        from game.save_slots import delete_slot
+        delete_slot(slot_id)
+        return {"ok": True}
+
+    @app.post("/api/undo")
+    def undo_turn():
+        from game.undo import undo_last_turn, can_undo
+        from game.state_context import state_lock
+        if not can_undo():
+            raise HTTPException(status_code=409, detail="Nothing to undo.")
+        try:
+            with state_lock():
+                undo_last_turn()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"ok": True, "state": get_full_state()}
+
+    @app.get("/api/debug/world")
+    def debug_world():
+        if not debug_enabled():
+            raise HTTPException(status_code=404, detail="Set AISTORY_DEBUG=1 to enable debug endpoints.")
+        from simulation.world_inspector import build_world_inspector
+        return build_world_inspector()
 
     @app.get("/api/setup")
     def setup_info():

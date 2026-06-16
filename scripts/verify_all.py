@@ -119,7 +119,8 @@ def test_investigation_flow():
 def test_story_loop_offline():
     from simulation.story_loop import process_player_action
     from simulation.turn_trace import get_last_turn
-    with patch("simulation.story_loop.generate_scene", return_value="[scene ok]"):
+    with patch("simulation.story_loop.get_narrator") as mock_get:
+        mock_get.return_value.generate_scene.return_value = "[scene ok]"
         for action in ("look around", "status", "wait for an hour"):
             result = process_player_action(action)
             assert result and isinstance(result, str), f"bad result for {action!r}: {result!r}"
@@ -212,7 +213,8 @@ def test_generation_report_offline():
         "a scholar in grey wool. (offline mock scene)"
     )
     try:
-        with patch("simulation.story_loop.generate_scene", return_value=mock_scene):
+        with patch("simulation.story_loop.get_narrator") as mock_get:
+            mock_get.return_value.generate_scene.return_value = mock_scene
             results = []
             for name, actions in list(FULL_SCENARIOS.items())[:3]:
                 results.append(rep.run_scenario(name, actions, live=False))
@@ -227,12 +229,17 @@ def test_generation_report_offline():
 
 def test_simulation_audit():
     import scripts.simulation_audit as audit
-    audit.audit_explore_anchor()
-    audit.audit_attack_her()
-    audit.audit_find_sword_inventory()
-    audit.audit_confession_witness()
-    audit.audit_find_person_role()
-    audit.audit_non_fatal_no_ghost_speaker()
+    from simulation import simulation_runner
+    simulation_runner.stop()
+    try:
+        audit.audit_explore_anchor()
+        audit.audit_attack_her()
+        audit.audit_find_sword_inventory()
+        audit.audit_confession_witness()
+        audit.audit_find_person_role()
+        audit.audit_non_fatal_no_ghost_speaker()
+    finally:
+        simulation_runner.start()
 
 
 def main():

@@ -6,10 +6,11 @@ of player input. The world advances every TICK_INTERVAL seconds whether
 the player acts or not.
 """
 
+import logging
 import threading
 import time
-import traceback
 
+from game.state_context import state_lock
 from simulation.npc_actions import simulate_npcs
 from simulation.consequences_engine import apply_npc_consequences
 from simulation.memory_engine import apply_memory_effects
@@ -24,145 +25,98 @@ from simulation.consequence_queue import process_pending
 from simulation.rival_engine import rival_tick
 from simulation.npc_memory_engine import process_memories
 
-# How many real-world seconds between world ticks.
-# 30 = one tick every 30 seconds. Lower = faster world.
-TICK_INTERVAL = 30
+from simulation.locks import get_tick_lock
 
+log = logging.getLogger(__name__)
+
+TICK_INTERVAL = 30
 _stop_event = threading.Event()
-_tick_lock = threading.Lock()   # prevents race between sim and story read
 _current_tick = 0
 _worker = None
-
-
-def get_tick_lock():
-    """Story loop acquires this before reading world state."""
-    return _tick_lock
 
 
 def get_current_tick():
     return _current_tick
 
 
+def _run_engine(name, fn, *args, **kwargs):
+    try:
+        fn(*args, **kwargs)
+    except Exception:
+        log.exception("sim tick engine failed: %s", name)
+
+
 def _run_tick():
     global _current_tick
 
-    with _tick_lock:
+    with state_lock():
         _current_tick += 1
         tick = _current_tick
 
-        try:
-            simulate_npcs(tick=tick)
-        except Exception:
-            traceback.print_exc()
+        from storage import load as _load, save as _save
 
-        try:
-            maintain_monsters()
-        except Exception:
-            traceback.print_exc()
+        _run_engine("simulate_npcs", simulate_npcs, tick=tick)
+        _run_engine("maintain_monsters", maintain_monsters)
+        _run_engine("apply_npc_consequences", apply_npc_consequences, tick=tick)
 
-        try:
-            apply_npc_consequences(tick=tick)
-        except Exception:
-            traceback.print_exc()
+        from simulation.district_state import advance_districts
+        _run_engine("advance_districts", advance_districts, tick=tick)
 
-        try:
-            from simulation.district_state import advance_districts
-            advance_districts(tick=tick)
-        except Exception:
-            traceback.print_exc()
+        from simulation.institution_leadership import process_leadership_succession
+        world = _load("world/world_state.json", {})
+        _run_engine(
+            "process_leadership_succession",
+            process_leadership_succession,
+            tick=tick,
+            day=world.get("day"),
+        )
 
-        try:
-            from simulation.institution_leadership import process_leadership_succession
-            from storage import load as _load
-            world = _load("world/world_state.json", {})
-            process_leadership_succession(tick=tick, day=world.get("day"))
-        except Exception:
-            traceback.print_exc()
+        _run_engine("run_faction_tick", run_faction_tick, tick=tick)
+        _run_engine("update_relationships", update_relationships)
+        _run_engine("apply_memory_effects", apply_memory_effects)
+        _run_engine("spread_rumors", spread_rumors)
 
-        try:
-            run_faction_tick(tick=tick)
-        except Exception:
-            traceback.print_exc()
+        from simulation.rumor_belief import spread_rumor_beliefs
+        world = _load("world/world_state.json", {})
+        _run_engine(
+            "spread_rumor_beliefs",
+            spread_rumor_beliefs,
+            tick=tick,
+            day=world.get("day"),
+        )
 
-        try:
-            update_relationships()
-        except Exception:
-            traceback.print_exc()
+        _run_engine("advance_storylines", advance_storylines, tick=tick)
+        _run_engine("advance_clock", advance_clock)
+        _run_engine("flush_events", flush_events)
 
-        try:
-            apply_memory_effects()
-        except Exception:
-            traceback.print_exc()
+        player = _load("player/player.json", {})
+        if player:
+            fired = process_pending(player, world)
+            if fired:
+                player.setdefault("journal", []).append({
+                    "tick": tick,
+                    "day": world.get("day"),
+                    "kind": "delayed",
+                    "action": fired[0],
+                    "excerpt": fired[0][:200],
+                })
+            from simulation.player_legacy import seed_legacy_rumors
+            from simulation.goal_events import maybe_goal_rumor
+            seed_legacy_rumors(player, tick=tick)
+            maybe_goal_rumor(player, tick=tick)
+            _save("player/player.json", player)
 
-        try:
-            spread_rumors()
-        except Exception:
-            traceback.print_exc()
+        player = _load("player/player.json", {})
+        npcs = _load("characters/npcs.json", {})
+        _run_engine("rival_tick", rival_tick, player, npcs, tick=tick)
+        _save("characters/npcs.json", npcs)
 
-        try:
-            from simulation.rumor_belief import spread_rumor_beliefs
-            from storage import load as _load
-            world = _load("world/world_state.json", {})
-            spread_rumor_beliefs(tick=tick, day=world.get("day"))
-        except Exception:
-            traceback.print_exc()
-
-        try:
-            advance_storylines(tick=tick)
-        except Exception:
-            traceback.print_exc()
-
-        try:
-            advance_clock()
-        except Exception:
-            traceback.print_exc()
-
-        try:
-            flush_events()
-        except Exception:
-            traceback.print_exc()
-
-        try:
-            from storage import load as _load, save as _save
-            world = _load("world/world_state.json", {})
-            player = _load("player/player.json", {})
-            if player:
-                fired = process_pending(player, world)
-                if fired:
-                    player.setdefault("journal", []).append({
-                        "tick": tick,
-                        "day": world.get("day"),
-                        "kind": "delayed",
-                        "action": fired[0],
-                        "excerpt": fired[0][:200],
-                    })
-                from simulation.player_legacy import seed_legacy_rumors
-                from simulation.goal_events import maybe_goal_rumor
-                seed_legacy_rumors(player, tick=tick)
-                maybe_goal_rumor(player, tick=tick)
-                _save("player/player.json", player)
-        except Exception:
-            traceback.print_exc()
-
-        try:
-            from storage import load as _load, save as _save
-            player = _load("player/player.json", {})
-            npcs = _load("characters/npcs.json", {})
-            rival_tick(player, npcs, tick=tick)
-            _save("characters/npcs.json", npcs)
-        except Exception:
-            traceback.print_exc()
-
-        try:
-            process_memories()
-        except Exception:
-            traceback.print_exc()
+        _run_engine("process_memories", process_memories)
 
 
 def _simulation_loop():
     while not _stop_event.is_set():
         _run_tick()
-        # Sleep in small increments so stop_event is checked promptly
         for _ in range(TICK_INTERVAL * 10):
             if _stop_event.is_set():
                 break
@@ -170,20 +124,14 @@ def _simulation_loop():
 
 
 def start():
-    """Start the background simulation thread. Call once at game start."""
     global _worker
     _stop_event.clear()
-    _worker = threading.Thread(target=_simulation_loop, daemon=True)
+    _worker = threading.Thread(target=_simulation_loop, daemon=True, name="aistory-sim")
     _worker.start()
     return _worker
 
 
 def stop():
-    """Signal the simulation to stop cleanly and wait for the current
-    tick to finish. Joining matters: a tick can be mid-write to a JSON
-    file, and exiting the process before it finishes truncates that file
-    and corrupts the save. The lock guarantees we only return between
-    ticks, never during one."""
     _stop_event.set()
     if _worker is not None:
         _worker.join(timeout=TICK_INTERVAL + 5)

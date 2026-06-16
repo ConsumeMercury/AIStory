@@ -7,7 +7,7 @@ import re
 
 from generation.descriptor_generator import short_descriptor
 from storage import load, save
-from simulation.narrator import generate_scene
+from simulation.narrator_protocol import get_narrator
 from simulation.event_logger import log_event, all_events
 from simulation.progression_engine import add_skill_xp
 from simulation.relationship_engine import (
@@ -53,6 +53,8 @@ from simulation.player_legacy import legacy_from_action, legacy_narrator_block
 from simulation.investigation_cases import ensure_case, advance_case, case_narrator_block
 from simulation.storyline_behavior import narrator_storyline_block
 from game.starting_placement import starting_pipeline_narrator_block
+from game.state_context import state_lock
+from game.undo import push_undo_snapshot
 from simulation.district_state import district_narrator_block
 from simulation.institution_politics import politics_narrator_block
 from generation.world_history import history_block
@@ -305,10 +307,10 @@ def process_player_action(action):
         record_turn(action=action, kind="meta", meta=True, scene_preview=(meta or "")[:200])
         return meta
 
-    lock = simulation_runner.get_tick_lock()
     tick = simulation_runner.get_current_tick()
 
-    with lock:
+    with state_lock():
+        push_undo_snapshot()
         log_event("player_action", "player", action, tick=tick)
         world = load(WORLD_FILE, {})
         npcs = load(NPC_FILE, {})
@@ -375,14 +377,14 @@ def process_player_action(action):
     delayed = pop_delayed_directive(player)
     extra_directive = delayed if delayed else None
     if delayed:
-        with lock:
+        with state_lock():
             save(PLAYER_FILE, player)
     name_reveal = None
     combat_target = None
 
     if detect_self_introduction(action, player):
         mark_name_revealed_to_present(player, [n["id"] for n in present])
-        with lock:
+        with state_lock():
             save(PLAYER_FILE, player)
 
     if kind == "travel":
@@ -393,12 +395,12 @@ def process_player_action(action):
         )
         if subplace:
             extra_directive = travel_msg
-            with lock:
+            with state_lock():
                 save(PLAYER_FILE, player)
         elif chosen:
             travel_before = snapshot_before_travel()
             ok, msg, hours, _ = travel(chosen, simulation_runner._run_tick)
-            with lock:
+            with state_lock():
                 world = load(WORLD_FILE, {})
                 player = load(PLAYER_FILE, {})
                 npcs = load(NPC_FILE, {})
@@ -414,7 +416,7 @@ def process_player_action(action):
 
     if kind == "wait":
         advance_clock(2)
-        with lock:
+        with state_lock():
             world = load(WORLD_FILE, {})
             npcs = load(NPC_FILE, {})
             areas = load(AREAS_FILE, {})
@@ -447,7 +449,7 @@ def process_player_action(action):
                 "descriptor": short_descriptor(target),
             }
 
-    with lock:
+    with state_lock():
         player = load(PLAYER_FILE, {})
         if action_ctx.get("target_id") and kind in (
             "talk", "personal_talk", "help", "give", "ask_name",
@@ -491,7 +493,7 @@ def process_player_action(action):
             elif scene_event["id"] == "accident":
                 stats = player.setdefault("stats", {})
                 stats["health"] = max(1, stats.get("health", 100) - random.randint(2, 6))
-            with lock:
+            with state_lock():
                 save(PLAYER_FILE, player)
 
     if kind not in ("travel", "attack", "rest", "search") and not action_ctx.get("skill_check"):
@@ -515,7 +517,7 @@ def process_player_action(action):
                 tid = action_ctx.get("target_id") or present[0]["id"]
                 from simulation.relationship_engine import apply_npc_toward_player
                 apply_npc_toward_player(tid, "betrayal", 1.0)
-            with lock:
+            with state_lock():
                 save(PLAYER_FILE, player)
 
     if kind in ("search", "general", "examine"):
@@ -532,7 +534,7 @@ def process_player_action(action):
             action_ctx["story_directive"] = (
                 action_ctx.get("story_directive", "") + " " + item_note
             ).strip()
-            with lock:
+            with state_lock():
                 save(PLAYER_FILE, player)
 
     if kind in ("search", "confess") and player.get("last_combat_target"):
@@ -551,7 +553,7 @@ def process_player_action(action):
             action_ctx["story_directive"] = (
                 action_ctx.get("story_directive", "") + " " + " ".join(parts)
             ).strip()
-        with lock:
+        with state_lock():
             save(PLAYER_FILE, player)
             save(NPC_FILE, npcs)
 
@@ -562,11 +564,11 @@ def process_player_action(action):
             action_ctx["story_directive"] = (
                 action_ctx.get("story_directive", "") + " " + hunt_note
             ).strip()
-        with lock:
+        with state_lock():
             save(PLAYER_FILE, player)
             save(MON_FILE, monsters)
 
-    with lock:
+    with state_lock():
         player = load(PLAYER_FILE, {})
         check = action_ctx.get("skill_check")
         _apply_action_mechanics(player, action_ctx, kind, check=check)
@@ -611,7 +613,7 @@ def process_player_action(action):
                 )
             if p_chg or n_chg:
                 npcs[tid] = target_npc
-                with lock:
+                with state_lock():
                     save(PLAYER_FILE, player)
                     save(NPC_FILE, npcs)
             if economy_directive:
@@ -620,7 +622,7 @@ def process_player_action(action):
                 ).strip()
 
     if kind == "attack":
-        with lock:
+        with state_lock():
             out = _do_combat(player, npcs, monsters, present, tick, action, action_ctx)
             directive, combat_target, err, combat_snap, _result = out
             player = load(PLAYER_FILE, {})
@@ -690,7 +692,7 @@ def process_player_action(action):
         if goal_hint:
             action_ctx["story_directive"] = (action_ctx.get("story_directive", "") + " " + goal_hint).strip()
 
-    with lock:
+    with state_lock():
         player = load(PLAYER_FILE, {})
         current_area = player.get("area")
         book = player.get("discovered_areas") or {}
@@ -701,7 +703,7 @@ def process_player_action(action):
                 extra_directive = ((extra_directive or "") + " " + intro).strip()
             save(PLAYER_FILE, player)
 
-    scene = generate_scene(
+    scene = get_narrator().generate_scene(
         player_action=action,
         world=world,
         player=player,
@@ -723,13 +725,13 @@ def process_player_action(action):
     )
 
     if name_reveal:
-        with lock:
+        with state_lock():
             player = load(PLAYER_FILE, {})
             player.setdefault("known_npcs", {}).setdefault(name_reveal["npc_id"], {})["name_known"] = True
             player["scene_focus"] = name_reveal["npc_id"]
             save(PLAYER_FILE, player)
 
-    with lock:
+    with state_lock():
         player = load(PLAYER_FILE, {})
         update_player_goals(player, kind, action_ctx, world)
         focus_npc = action_ctx.get("target_id")

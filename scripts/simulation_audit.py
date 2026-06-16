@@ -66,13 +66,15 @@ def _reset_player_baseline():
 
 
 def _run_sequence(actions):
-    from unittest.mock import patch
+    from unittest.mock import MagicMock, patch
     from simulation.story_loop import process_player_action
     from storage import load, save
 
     CAPTURED.clear()
     results = []
-    with patch("simulation.story_loop.generate_scene", side_effect=_mock_generate_scene):
+    mock_narr = MagicMock()
+    mock_narr.generate_scene.side_effect = _mock_generate_scene
+    with patch("simulation.story_loop.get_narrator", return_value=mock_narr):
         for action in actions:
             scene = process_player_action(action)
             player = load("player/player.json", {})
@@ -170,13 +172,15 @@ def audit_find_person_role():
 
 def audit_non_fatal_no_ghost_speaker():
     """After non-fatal fight, focal npc should be alive status in snapshot."""
-    from unittest.mock import patch
+    from unittest.mock import MagicMock, patch
     from simulation.story_loop import process_player_action
 
     CAPTURED.clear()
     _reset_player_baseline()
     # Force non-fatal by patching resolve_combat
-    with patch("simulation.story_loop.generate_scene", side_effect=_mock_generate_scene):
+    mock_narr = MagicMock()
+    mock_narr.generate_scene.side_effect = _mock_generate_scene
+    with patch("simulation.story_loop.get_narrator", return_value=mock_narr):
         with patch("simulation.story_loop.resolve_combat") as rc:
             rc.return_value = {
                 "rounds": 2, "log": [], "winner": None, "loser": None,

@@ -241,7 +241,10 @@ def active_goal_hint(player, area_storyline=None):
         return "You have done what you set out to do — now choose what comes next."
 
     primary = goals[0]
-    line = f"Your aim: {primary['text']} ({primary['progress']}/{primary['target']}). {primary['hint']}"
+    prog = primary.get("progress", 0)
+    target = primary.get("target", 1)
+    hint = primary.get("hint", "")
+    line = f"Your aim: {primary.get('text', 'Survive')} ({prog}/{target}). {hint}"
     if area_storyline and area_storyline.get("current"):
         line += f" Here: {area_storyline['current'][:90]}."
     return line

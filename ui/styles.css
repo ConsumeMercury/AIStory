@@ -877,3 +877,25 @@ body.layout-mobile .turn-prose {
   color: var(--text-muted);
   min-height: 1.2em;
 }
+
+.save-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.save-row input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.4rem 0.5rem;
+  border-radius: 4px;
+}
+.save-slot-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--border);
+}

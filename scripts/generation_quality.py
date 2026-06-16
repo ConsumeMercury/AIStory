@@ -81,11 +81,12 @@ def main():
         from simulation.gemini_client import require_api_key
         require_api_key()
     else:
-        from unittest.mock import patch
-        patcher = patch(
-            "simulation.story_loop.generate_scene",
-            return_value="You stand at the docks. She watches you. (offline mock scene)",
+        from unittest.mock import MagicMock, patch
+        mock_narr = MagicMock()
+        mock_narr.generate_scene.return_value = (
+            "You stand at the docks. She watches you. (offline mock scene)"
         )
+        patcher = patch("simulation.story_loop.get_narrator", return_value=mock_narr)
         patcher.start()
 
     try:

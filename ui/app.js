@@ -342,6 +342,7 @@ function openModal(kind) {
     map: "Travel",
     character: "Character Sheet",
     world: "World",
+    saves: "Save / load",
   };
   modalTitle.textContent = titles[kind] || "Panel";
 
@@ -363,6 +364,81 @@ function openModal(kind) {
     modalBody.innerHTML = renderCharacterModal();
   } else if (kind === "world") {
     modalBody.innerHTML = renderWorldModal();
+  } else if (kind === "saves") {
+    renderSavesModal();
+  }
+}
+
+async function renderSavesModal() {
+  modalBody.innerHTML = "<p class=\"sheet-note\">Loading saves…</p>";
+  try {
+    const data = await api("/api/saves");
+    const slots = data.slots || [];
+    let html = `
+      <div class="sheet-section">
+        <h4>Save current game</h4>
+        <div class="save-row">
+          <input type="text" id="save-slot-id" placeholder="slot name" maxlength="32" />
+          <button type="button" class="qa-btn" id="save-slot-btn">Save</button>
+        </div>
+      </div>
+      <div class="sheet-section">
+        <h4>Saved games</h4>`;
+    if (!slots.length) {
+      html += `<p class="sheet-note">No save slots yet.</p>`;
+    } else {
+      html += slots.map((s) => `
+        <div class="save-slot-row">
+          <div><strong>${esc(s.label || s.id)}</strong>
+            ${s.character ? `<span class="sheet-note"> · ${esc(s.character)}</span>` : ""}
+          </div>
+          <button type="button" class="qa-btn" data-load-slot="${attrEsc(s.id)}">Load</button>
+        </div>`).join("");
+    }
+    html += `</div>`;
+    modalBody.innerHTML = html;
+    $("#save-slot-btn")?.addEventListener("click", async () => {
+      const id = ($("#save-slot-id")?.value || "").trim() || `save_${Date.now()}`;
+      try {
+        await api(`/api/saves/${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify({ label: id }) });
+        appendSystem(`Game saved to slot “${id}”.`);
+        renderSavesModal();
+      } catch (err) {
+        appendSystem(err.message || "Save failed.");
+      }
+    });
+    modalBody.querySelectorAll("[data-load-slot]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const slot = btn.getAttribute("data-load-slot");
+        try {
+          const res = await api(`/api/saves/${encodeURIComponent(slot)}/load`, { method: "POST" });
+          if (res.state) await startGame(res);
+          appendSystem(`Loaded save “${slot}”.`);
+          closeModal();
+        } catch (err) {
+          appendSystem(err.message || "Load failed.");
+        }
+      });
+    });
+  } catch (err) {
+    modalBody.innerHTML = `<p class="sheet-note">${esc(err.message || "Could not list saves.")}</p>`;
+  }
+}
+
+async function undoLastTurn() {
+  if (busy) return;
+  busy = true;
+  try {
+    const res = await api("/api/undo", { method: "POST" });
+    if (res.state) {
+      state = res.state;
+      refreshSidebar();
+      appendSystem("Undid the last turn.");
+    }
+  } catch (err) {
+    appendSystem(err.message || "Nothing to undo.");
+  } finally {
+    busy = false;
   }
 }
 
@@ -832,6 +908,7 @@ actionForm.addEventListener("submit", (e) => {
 
 $("#modal-close").addEventListener("click", closeModal);
 modalBackdrop.addEventListener("click", closeModal);
+$("#btn-undo")?.addEventListener("click", undoLastTurn);
 
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && openModalKind) closeModal();

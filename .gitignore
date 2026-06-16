@@ -7,3 +7,6 @@ __pycache__/
 .vscode/
 *.log
 player/
+saves/
+generation_report.txt
+generation_report_console.txt

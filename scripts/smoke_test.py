@@ -208,11 +208,13 @@ def test_ui_destinations():
 
 
 def test_turn_trace():
-    from unittest.mock import patch
+    from unittest.mock import MagicMock, patch
     from simulation.story_loop import process_player_action
     from simulation.turn_trace import get_last_turn
 
-    with patch("simulation.story_loop.generate_scene", return_value="[scene ok]"):
+    mock_narr = MagicMock()
+    mock_narr.generate_scene.return_value = "[scene ok]"
+    with patch("simulation.story_loop.get_narrator", return_value=mock_narr):
         process_player_action("status")
     trace = get_last_turn()
     assert trace.get("kind") == "meta"
