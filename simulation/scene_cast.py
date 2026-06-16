@@ -124,6 +124,52 @@ def select_scene_cast(present, player, action_ctx, max_focus=1):
     institutions = load(INST_FILE, {})
 
     if action_ctx.get("travel_failed") or action_ctx.get("approach_failed"):
+        journal = player.get("journal") or []
+        inherit_ids = set()
+        if player.get("scene_focus"):
+            inherit_ids.add(player["scene_focus"])
+        if journal:
+            last = journal[-1]
+            if last.get("focus_npc"):
+                inherit_ids.add(last["focus_npc"])
+            if last.get("area") == player.get("area"):
+                for pid in last.get("present_ids") or []:
+                    inherit_ids.add(pid)
+                for pid in last.get("focus_cast") or []:
+                    inherit_ids.add(pid)
+        inherited = []
+        seen = set()
+        priority = []
+        if player.get("scene_focus"):
+            priority.append(player["scene_focus"])
+        if journal and journal[-1].get("focus_npc"):
+            fn = journal[-1]["focus_npc"]
+            if fn not in priority:
+                priority.append(fn)
+        for pid in priority:
+            for n in present:
+                if n["id"] == pid and pid not in seen:
+                    inherited.append(n)
+                    seen.add(pid)
+        for n in present:
+            if n["id"] in inherit_ids and n["id"] not in seen:
+                inherited.append(n)
+                seen.add(n["id"])
+        if inherited:
+            fid = inherited[0]["id"]
+            action_ctx["target_id"] = fid
+            others = len(present) - len(inherited)
+            crowd = (
+                f"{others} other people are nearby as background only — "
+                "indistinct, unnamed, no dialogue."
+                if others > 0 else
+                "No other individuals worth distinguishing this scene."
+            )
+            return inherited, (
+                "NO MOVEMENT — the protagonist stays where they were. "
+                "Same people as the prior beat — do NOT introduce new named strangers. "
+                "ONLY the people listed below may speak; background crowd stays faceless."
+            ), fid
         return [], (
             "NO MOVEMENT — the protagonist stays where they were. "
             "Do NOT describe entering new buildings, crossing districts, or meeting strangers. "

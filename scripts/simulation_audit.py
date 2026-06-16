@@ -372,7 +372,20 @@ def audit_travel_failed_empty_cast():
     last = CAPTURED[-1]
     _assert(last.get("travel_failed") or "not on the travel map" in (last.get("extra_head") or "").lower(),
             "expected travel failure")
-    _assert(len(last.get("focus_ids") or []) == 0, f"travel failed should have empty cast: {last}")
+    _assert(len(last.get("focus_ids") or []) == 0, f"travel failed with no prior focus should have empty cast: {last}")
+
+
+def audit_travel_failed_inherits_focus():
+    _reset_player_baseline()
+    _run_sequence(["look around", "go to the moon"])
+    cap = _last_capture("go to the moon")
+    _assert(cap.get("travel_failed"), f"expected travel failure: {cap}")
+    _assert(len(cap.get("focus_ids") or []) >= 1,
+            f"blocked travel should inherit prior focal cast: {cap}")
+    _assert(
+        cap.get("focal_npc_id") == cap["focus_ids"][0],
+        f"focal_npc_id must match inherited cast: {cap}",
+    )
 
 
 def main():
@@ -387,6 +400,7 @@ def main():
         ("withdraw_clears_focus", audit_withdraw_clears_focus),
         ("focal_id_integrity", audit_focal_id_integrity),
         ("travel_failed_empty_cast", audit_travel_failed_empty_cast),
+        ("travel_failed_inherits_focus", audit_travel_failed_inherits_focus),
     ]
     failed = []
     for name, fn in tests:

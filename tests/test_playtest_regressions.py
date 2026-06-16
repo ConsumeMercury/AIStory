@@ -1,6 +1,6 @@
 """Regressions from live playtest — focus stickiness, ask_name speech, streaming, time."""
 
-from simulation.action_interpreter import interpret_action, speech_for_ask_name
+from simulation.action_interpreter import interpret_action, speech_for_ask_name, speech_for_ask_about, extract_player_speech
 from simulation.gemini_client import _append_stream_piece
 from simulation.target_resolution import resolve_action_target
 from simulation.world_clock import ACTION_TIME_HOURS
@@ -85,6 +85,102 @@ def test_stream_piece_merge_legacy_heuristic():
 def test_dialogue_actions_cost_zero_hours():
     for kind in ("talk", "ask_name", "withdraw", "ask_about", "personal_talk"):
         assert ACTION_TIME_HOURS.get(kind) == 0
+
+
+def test_ask_about_reconstructs_why_question():
+    action = "Ask Tomas the herbalist why he warned me about the shout"
+    speech = speech_for_ask_about(action)
+    assert speech
+    assert "warn" in speech.lower()
+    assert "shout" in speech.lower()
+    assert "tomas" not in speech.lower()
+    assert "?" in speech
+    ctx = interpret_action(action, {"scene_focus": "h1", "known_npcs": {}}, [_npc("h1", role="herbalist")], {})
+    assert ctx["kind"] == "ask_about"
+    assert ctx.get("player_speech")
+    assert "tomas" not in ctx["player_speech"].lower()
+
+
+def test_ask_about_reconstructs_what_question():
+    action = "Ask the herbalist what she meant about the garden gates"
+    speech = speech_for_ask_about(action)
+    assert speech
+    assert "garden gates" in speech.lower()
+    assert "herbalist" not in speech.lower()
+    ctx = interpret_action(action, {"scene_focus": "h1", "known_npcs": {}}, [_npc("h1", role="herbalist")], {})
+    assert ctx["kind"] == "ask_about"
+    assert ctx.get("player_speech")
+    assert "herbalist what" not in ctx["player_speech"].lower()
+
+
+def test_travel_failed_inherits_prior_focus_in_cast():
+    from simulation.scene_cast import select_scene_cast
+
+    herbalist = _npc("h1", role="herbalist", name="", gender="female")
+    guard = _npc("g1", role="guard", name="Holt", gender="male")
+    player = {
+        "scene_focus": "h1",
+        "journal": [{"focus_npc": "h1", "kind": "talk"}],
+        "known_npcs": {},
+    }
+    ctx = {"kind": "travel", "travel_failed": True}
+    focus, note, fid = select_scene_cast([herbalist, guard], player, ctx)
+    assert len(focus) == 1
+    assert focus[0]["id"] == "h1"
+    assert fid == "h1"
+    assert "Same people" in note
+
+
+def test_mangled_ask_without_prefix_reconstructs_speech():
+    action = "The herbalist what she meant about the garden gates?"
+    speech = speech_for_ask_about(action)
+    assert speech
+    assert "garden gates" in speech.lower()
+    assert "herbalist what" not in speech.lower()
+    ctx = interpret_action(action, {"scene_focus": "h1", "known_npcs": {}}, [_npc("h1", role="herbalist")], {})
+    assert ctx["kind"] == "ask_about"
+    assert ctx.get("player_speech")
+    assert "herbalist what" not in ctx["player_speech"].lower()
+
+
+def test_travel_failed_inherits_prior_present_set():
+    from simulation.scene_cast import select_scene_cast
+
+    herbalist = _npc("h1", role="herbalist", name="", gender="female")
+    guard = _npc("g1", role="guard", name="Holt", gender="male")
+    local = _npc("l1", role="merchant", name="", gender="male")
+    player = {
+        "area": "city:high_quarter",
+        "scene_focus": "h1",
+        "journal": [{
+            "focus_npc": "h1",
+            "area": "city:high_quarter",
+            "present_ids": ["h1", "g1", "l1"],
+            "focus_cast": ["h1"],
+        }],
+        "known_npcs": {},
+    }
+    ctx = {"kind": "travel", "travel_failed": True}
+    focus, note, fid = select_scene_cast([herbalist, guard, local], player, ctx)
+    assert len(focus) == 3
+    assert {n["id"] for n in focus} == {"h1", "g1", "l1"}
+    assert fid == "h1"
+    assert "Same people" in note
+
+
+def test_misname_directive_flags_wrong_name():
+    from simulation.generation_guardrails import build_misname_directive
+
+    herbalist = _npc("h1", role="herbalist", name="", gender="female")
+    directive = build_misname_directive(
+        "Ask Tomas the herbalist why he warned me",
+        herbalist,
+        {"h1": herbalist, "t1": _npc("t1", name="Tomas", role="merchant")},
+        "h1",
+    )
+    assert directive
+    assert "Tomas" in directive
+    assert "NOT Tomas" in directive or "NOT" in directive
 
 
 def test_focus_role_switch_issue_detects_swap():

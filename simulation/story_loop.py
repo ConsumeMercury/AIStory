@@ -25,7 +25,7 @@ from simulation.scene_coherence import (
     DIALOGUE_KINDS,
 )
 from simulation.local_places import resolve_local_movement, record_narrator_places
-from simulation.generation_guardrails import build_hard_constraints_block
+from simulation.generation_guardrails import build_hard_constraints_block, build_misname_directive
 from simulation.prose_validator import (
     log_scene_prose_issues,
     validate_scene_prose,
@@ -979,8 +979,16 @@ def process_player_action(action, *, on_prose_chunk=None):
         scene_place += " — " + (area_for_place["atmosphere"][0] if area_for_place["atmosphere"] else "")
 
     focal_npc = focus_npcs[0] if focus_npcs else None
+    misname = build_misname_directive(
+        action, focal_npc, npcs, action_ctx.get("target_id") or focal_id,
+    )
+    if misname:
+        action_ctx["story_directive"] = (
+            action_ctx.get("story_directive", "") + " " + misname
+        ).strip()
+
     hard_constraints = build_hard_constraints_block(
-        focal_id, focal_npc, scene_place, action_ctx,
+        focal_id, focal_npc, scene_place, action_ctx, present=present,
     )
 
     with state_lock():
@@ -1072,6 +1080,8 @@ def process_player_action(action, *, on_prose_chunk=None):
             "place": journal_place,
             "subplace": (player.get("scene_subplace") or {}).get("id"),
             "focus_npc": focus_npc,
+            "focus_cast": [n["id"] for n in focus_npcs],
+            "present_ids": [n["id"] for n in present],
             "approach_failed": bool(action_ctx.get("approach_failed")),
             "travel_failed": bool(action_ctx.get("travel_failed")),
             "target_ambiguous": bool(action_ctx.get("target_ambiguous")),

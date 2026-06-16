@@ -18,6 +18,12 @@ _PATTERNS = [
     (re.compile(r"\b(accuse|call out|denounce|you did it)\b", re.I), "accuse"),
     (re.compile(r"\b(ask about|ask around about|what do you know about|who killed|who stole|about the murder|about the theft)\b", re.I), "ask_about"),
     (re.compile(r"^\s*ask\s+[A-Za-z][A-Za-z'-]{1,28}\s+about\s+", re.I), "ask_about"),
+    (re.compile(r"^\s*ask\s+.+\b(why|what|how|where|when|who|whether|if)\b", re.I), "ask_about"),
+    (re.compile(
+        r"^\s*(?:the|a|an)\s+(?:[\w'-]+\s+){0,5}?"
+        r"(why|what|how|where|when|who|whether|if)\s+",
+        re.I,
+    ), "ask_about"),
     (re.compile(r"\b(stake out|wait for|watch for|keep watch)\b", re.I), "wait"),
     (re.compile(r"\b(hunt|track|stalk|trail|follow tracks|follow the trail)\b", re.I), "hunt"),
     (re.compile(r"\bfollow\s+(?:the\s+)?(?:noise|sound|them|him|her)\b", re.I), "approach"),
@@ -88,14 +94,63 @@ def speech_for_ask_name(action):
     return "What is your name?"
 
 
-def extract_player_speech(action, player=None, *, kind=None):
-    """Words the protagonist actually says aloud, if any."""
+_ASK_WH = re.compile(
+    r"^\s*ask\s+(?:(?:the|a|an)\s+(?:[\w'-]+\s+)*)*"
+    r"(?:[\w'-]+\s+){0,4}?"
+    r"(why|what|how|where|when|who|whether|if)\s+(.+)$",
+    re.I,
+)
+_MANGLED_ASK_WH = re.compile(
+    r"^\s*(?:the|a|an)\s+(?:[\w'-]+\s+){0,5}?"
+    r"(why|what|how|where|when|who|whether|if)\s+(.+)$",
+    re.I,
+)
+
+
+def _second_person_question(rest):
+    """Rewrite she/he third-person question tail into direct address."""
+    q = rest.strip().rstrip("?.!")
+    q = re.sub(r"\b(she|he)\s+meant\b", "you meant", q, flags=re.I)
+    q = re.sub(r"\b(she|he)\s+(warned|said|told|mentioned)\b", r"you \2", q, flags=re.I)
+    q = re.sub(r"\bher\b", "your", q, flags=re.I)
+    q = re.sub(r"\bhis\b", "your", q, flags=re.I)
+    q = re.sub(r"\bhim\b", "you", q, flags=re.I)
+    return q
+
+
+def _format_wh_question(wh, rest):
+    """Build a second-person question from wh-word + rewritten tail."""
+    rest = _second_person_question(rest)
+    if wh == "why":
+        if not re.match(r"^(did|do|were|was|have|has)\b", rest, re.I):
+            rest = re.sub(r"^you\s+", "", rest, flags=re.I)
+            rest = f"did you {rest}"
+        rest = re.sub(r"\byou (\w+)ed\b", lambda m: f"you {m.group(1)}", rest)
+        return f"Why {rest.rstrip('?.!')}?"
+    if wh == "what":
+        if re.match(r"^you meant\b", rest, re.I):
+            return f"What {rest.rstrip('?.!')}?"
+        if not re.match(r"^(did|do|is|are|was|were|you)\b", rest, re.I):
+            rest = f"did you mean {rest}" if "mean" in rest else f"is {rest}"
+        return f"What {rest.rstrip('?.!')}?"
+    if wh == "how":
+        return f"How {rest.rstrip('?.!')}?"
+    if wh == "where":
+        return f"Where {rest.rstrip('?.!')}?"
+    if wh == "when":
+        return f"When {rest.rstrip('?.!')}?"
+    if wh == "who":
+        return f"Who {rest.rstrip('?.!')}?"
+    if wh in ("if", "whether"):
+        return f"{'Whether' if wh == 'whether' else 'If'} {rest.rstrip('?.!')}?"
+    return None
+
+
+def speech_for_ask_about(action):
+    """Reconstruct a clean spoken question from 'Ask X why/what/how …' commands."""
     text = (action or "").strip()
     if not text:
         return None
-
-    if kind == "ask_name":
-        return speech_for_ask_name(action)
 
     m = _QUOTED.search(text)
     if m:
@@ -107,11 +162,53 @@ def extract_player_speech(action, player=None, *, kind=None):
         if topic:
             return f"What can you tell me about {topic}?"
 
-    m = re.match(r"^\s*ask\s+(.+)$", text, re.I)
+    m = _ASK_WH.match(text)
     if m:
-        rest = m.group(1).strip().rstrip("?.!")
-        if rest and not rest.lower().startswith("for "):
-            return f"{rest}?"
+        q = _format_wh_question(m.group(1).lower(), m.group(2))
+        if q:
+            return q
+
+    if not re.match(r"^\s*ask\s+", text, re.I):
+        m_mangled = _MANGLED_ASK_WH.match(text)
+        if m_mangled:
+            q = _format_wh_question(m_mangled.group(1).lower(), m_mangled.group(2))
+            if q:
+                return q
+        prefixed = speech_for_ask_about(f"Ask {text.rstrip('?.!')}")
+        if prefixed:
+            return prefixed
+
+    return None
+
+
+def extract_player_speech(action, player=None, *, kind=None):
+    """Words the protagonist actually says aloud, if any."""
+    text = (action or "").strip()
+    if not text:
+        return None
+
+    if kind == "ask_name":
+        return speech_for_ask_name(action)
+
+    if kind in ("ask_about", "talk") and re.match(r"^\s*ask\s+", text, re.I):
+        ask_q = speech_for_ask_about(action)
+        if ask_q:
+            return ask_q
+
+    if kind in ("ask_about", "talk", "general"):
+        ask_q = speech_for_ask_about(action)
+        if ask_q:
+            return ask_q
+
+    m = _QUOTED.search(text)
+    if m:
+        return (m.group(1) or m.group(2)).strip()
+
+    m_named = _ASK_NAMED.match(text)
+    if m_named:
+        topic = m_named.group(2).strip().rstrip("?.!")
+        if topic:
+            return f"What can you tell me about {topic}?"
 
     lower = text.lower()
     for prefix in ("i say ", "i ask ", "i tell ", "say ", "tell ", "whisper ", "shout "):
@@ -128,11 +225,10 @@ def extract_player_speech(action, player=None, *, kind=None):
                     return q + "?"
             elif len(rest) > 8:
                 return rest.strip().strip('"\'')
-    # "ask " prefix without ask_for work (guild pattern may have matched instead)
     if lower.startswith("ask ") and "for work" not in lower:
-        rest = text[4:].strip()
-        if len(rest) > 4:
-            return rest if rest.endswith("?") else rest + "?"
+        ask_q = speech_for_ask_about(action)
+        if ask_q:
+            return ask_q
 
     m_intro = re.match(r"^\s*(my name is|i'?m called|call me|i am)\s+(.+)$", text, re.I)
     if m_intro:
@@ -411,10 +507,11 @@ def interpret_action(action, player, present_npcs, world, npcs=None):
         ctx["memory_tag"] = "socialise"
         ctx["relationship"] = ("charm", 0.4)
         ctx["skill_xp"] = ("empathy", 7)
-        speech = extract_player_speech(action, player) or action.strip()
-        ctx["player_speech"] = speech[:120]
+        speech = extract_player_speech(action, player, kind=kind) or speech_for_ask_about(action)
+        if speech:
+            ctx["player_speech"] = speech[:120]
         ctx["story_directive"] = (
-            f"They ask about: \"{speech[:100]}\". "
+            f"The protagonist asks aloud: \"{(speech or action.strip())[:100]}\". "
             f"Answers may lie, deflect, or trade truth for trust."
         )
 

@@ -51,6 +51,8 @@ _DESC_HINTS = (
     (re.compile(r"\b(captain|sailor|dockmaster|harbour master|harbor master)\b", re.I), lambda n: n.get("role") in ("sailor", "merchant", "guard")),
     (re.compile(r"\b(priest|cleric|monk|clerk|clerics)\b", re.I), lambda n: n.get("role") == "priest"),
     (re.compile(r"\b(merchant|trader)\b", re.I), lambda n: n.get("role") in ("merchant", "innkeeper")),
+    (re.compile(r"\b(hunter|hunters)\b", re.I), lambda n: n.get("role") == "hunter"),
+    (re.compile(r"\b(herbalist|herbalists)\b", re.I), lambda n: n.get("role") in ("herbalist", "priest", "merchant")),
     (re.compile(r"\b(woman|lady|girl)\b", re.I), lambda n: n.get("gender") == "female"),
     (re.compile(r"\b(man|fellow|bloke)\b", re.I), lambda n: n.get("gender") == "male"),
 )
@@ -93,11 +95,18 @@ def match_npc_by_description(action, present):
     return None
 
 
+_PRONOUN_REF = re.compile(
+    r"\b(her|him|them|they|she|he|that one|this one|the same one)\b", re.I,
+)
+
+
 def resolve_pronoun_target(action, player, present):
-    """Resolve her/him/them to a present NPC using focus and last combat target."""
+    """Resolve her/him/them to a present NPC — only when the action uses pronouns."""
     if not present:
         return None
     text = (action or "").lower()
+    if not _PRONOUN_REF.search(text):
+        return None
     focus = player.get("scene_focus")
     last = player.get("last_combat_target")
 
@@ -139,6 +148,21 @@ def resolve_pronoun_target(action, player, present):
     return None
 
 
+def _action_requests_specific_combat_target(action, npcs, player, present):
+    """True when the player named a role, descriptor, or NPC — not a generic fight."""
+    if not action:
+        return False
+    if find_npc_by_name_in_text(action, npcs, player):
+        return True
+    if _COMBAT_ROLE.search(action):
+        return True
+    for pattern, _matcher in _DESC_HINTS:
+        if pattern.search(action):
+            return True
+    from simulation.target_resolution import action_mentions_role_or_descriptor
+    return action_mentions_role_or_descriptor(action, present=present)
+
+
 def resolve_combat_target(action, player, present, npcs, monsters, area, city):
     """
     Who the player actually fights. NPC targeting beats random present[0].
@@ -148,32 +172,38 @@ def resolve_combat_target(action, player, present, npcs, monsters, area, city):
 
     mon_here = monsters_in_area(area, monsters, city=city) if area else []
     text = (action or "").lower()
+    specific = _action_requests_specific_combat_target(action, npcs, player, present)
 
     named = find_npc_by_name_in_text(action, npcs, player)
     if named:
         for n in present:
             if n["id"] == named["id"]:
                 return n, "npc"
+        return None, None
+
+    desc = match_npc_by_description(action, present)
+    if desc:
+        return desc, "npc"
+
+    if specific:
+        return None, None
 
     pron = resolve_pronoun_target(action, player, present)
     if pron:
         return pron, "npc"
-
-    focus = player.get("scene_focus")
-    if focus:
-        for n in present:
-            if n["id"] == focus:
-                return n, "npc"
 
     last = player.get("last_combat_target")
     if last and re.search(r"\b(again|anyway|still|finish|keep fighting)\b", text):
         for n in present:
             if n["id"] == last:
                 return n, "npc"
+        return None, None
 
-    desc = match_npc_by_description(action, present)
-    if desc:
-        return desc, "npc"
+    focus = player.get("scene_focus")
+    if focus:
+        for n in present:
+            if n["id"] == focus:
+                return n, "npc"
 
     if re.search(r"\b(monster|beast|wolf|creature|ghoul|stalker)\b", text) and mon_here:
         return mon_here[0], "monster"

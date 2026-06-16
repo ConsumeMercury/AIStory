@@ -3,6 +3,8 @@ Central checklist for narration guardrails — used in prompts and offline audit
 Keeps simulation facts and Gemini prose aligned.
 """
 
+import re
+
 from generation.descriptor_generator import short_descriptor
 
 GUARDRAIL_RULES = (
@@ -17,6 +19,7 @@ GUARDRAIL_RULES = (
     "PLAYER: Quote protagonist speech exactly once when given; never invent their lines.",
     "WITHDRAW: End exchange; clear focus after — do not continue old thread next beat unless player re-engages.",
     "TARGET: Role hints pick a matching NPC; keep scene_focus when that NPC fits the hint.",
+    "MISNAME: If the player uses the wrong name, the focal NPC corrects them — do not invent a third person.",
 )
 
 
@@ -28,7 +31,48 @@ def guardrails_prompt_block():
     return "\n".join(lines)
 
 
-def build_hard_constraints_block(focal_npc_id, focal_npc, scene_place, action_context=None):
+def build_misname_directive(action, target_npc, npcs, target_id):
+    """
+    When player text names someone other than the resolved focal NPC,
+    tell the narrator to have them push back — not invent reconciling characters.
+    """
+    if not action or not target_npc or not target_id:
+        return ""
+    focal_name = (target_npc.get("name") or "").strip()
+    focal_first = focal_name.split()[0].lower() if focal_name else ""
+    text_l = action.lower()
+    wrong_names = []
+    for nid, npc in (npcs or {}).items():
+        if nid == target_id or npc.get("status") != "alive":
+            continue
+        name = (npc.get("name") or "").strip()
+        if not name:
+            continue
+        first = name.split()[0].lower()
+        if len(first) < 3 or first == focal_first:
+            continue
+        if re.search(rf"\b{re.escape(first)}\b", text_l):
+            wrong_names.append(name)
+    for token in re.findall(r"\bask\s+(?:the\s+)?([a-z]{3,})\b", text_l):
+        if token in ("the", "her", "him", "why", "what", "how", "about"):
+            continue
+        role_l = (target_npc.get("role") or "").lower()
+        occ_l = (target_npc.get("occupation") or "").lower()
+        if focal_first and token != focal_first and token not in {role_l, *occ_l.split()}:
+            if token.title() not in wrong_names:
+                wrong_names.append(token.title())
+    if not wrong_names:
+        return ""
+    label = focal_name or short_descriptor(target_npc)
+    wrong = wrong_names[0]
+    return (
+        f"MISNAME GUARD: The player said \"{wrong}\" but the focal person is {label}. "
+        f"They are NOT {wrong}. The focal NPC must correct the mistake or deflect — "
+        f"do NOT invent a third character named {wrong} to reconcile the error."
+    )
+
+
+def build_hard_constraints_block(focal_npc_id, focal_npc, scene_place, action_context=None, present=None):
     """
     Final pre-write constraints — location, movement, and focal identity.
     Simulation passes these explicitly; the narrator must not re-derive them.
@@ -44,8 +88,17 @@ def build_hard_constraints_block(focal_npc_id, focal_npc, scene_place, action_co
         lines.append(
             "- NO MOVEMENT occurred this beat. Do NOT describe entering new rooms or traveling. "
             "Do NOT invent barred gates to a place named in prior narration. "
-            "Do NOT repeat the focal NPC's last line — react to the stall or stay silent."
+            "Do NOT swap in new named characters — same people as last beat."
         )
+        if present:
+            labels = [
+                short_descriptor(n) for n in present[:8]
+                if n.get("status") == "alive"
+            ]
+            if labels:
+                lines.append(
+                    "- STILL PRESENT (only these may be named): " + "; ".join(labels) + "."
+                )
     if ctx.get("target_ambiguous"):
         lines.append(
             "- TARGET UNCLEAR — no violence or directed dialogue toward a specific person. "
@@ -91,9 +144,6 @@ def audit_capture_anomalies(capture, player, npcs):
         warnings.append(
             f"ledger built for {ledger_focal_id!r} but focal_npc_id is {focal_npc_id!r}"
         )
-
-    if ctx.get("travel_failed") and focus_ids:
-        warnings.append("travel_failed but cast still has focal NPCs")
 
     if kind == "investigate" and (focus_ids or focal_npc_id or target_id):
         warnings.append("investigate must have empty cast and no target")
