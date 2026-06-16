@@ -87,8 +87,8 @@ def audit_capture_anomalies(capture, player, npcs):
     if ctx.get("travel_failed") and focus_ids:
         warnings.append("travel_failed but cast still has focal NPCs")
 
-    if kind == "investigate" and not target_id and focus_ids:
-        warnings.append("investigate without target should have empty cast")
+    if kind == "investigate" and (focus_ids or focal_npc_id or target_id):
+        warnings.append("investigate must have empty cast and no target")
 
     if "priest" in action or "cleric" in action:
         if target_id and npcs:

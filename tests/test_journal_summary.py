@@ -21,14 +21,17 @@ def test_maybe_compact_journal_rolls_old_beats():
         "journal": [_entry(i, f"action {i}") for i in range(JOURNAL_DETAIL_LIMIT + 5)],
         "journal_summaries": [],
     }
-    changed = maybe_compact_journal(player)
+    changed = maybe_compact_journal(player, npcs={})
     assert changed is True
     assert len(player["journal"]) < JOURNAL_DETAIL_LIMIT + 5
     assert player["journal_summaries"]
+    assert isinstance(player["journal_summaries"][0], dict)
+    assert player["journal_summaries"][0].get("text")
 
 
-def test_distant_context_block_includes_summaries():
-    player = {"journal_summaries": ["days 1–3: look around; talk"]}
+def test_distant_context_block_structured_summaries():
+    player = {"journal_summaries": [{"text": "days 1–3: look around; talk", "source": "llm"}]}
     block = distant_context_block(player)
     assert "DISTANT HISTORY" in block
     assert "look around" in block
+    assert "narrative summary" in block

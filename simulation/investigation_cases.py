@@ -9,6 +9,7 @@ from storage import load, save
 from generation.npc_secrets import hidden_secrets
 
 PLAYER_FILE = "player/player.json"
+NPC_FILE = "characters/npcs.json"
 
 
 def _pick_npcs(area_id, npcs, count, exclude=None):
@@ -22,15 +23,63 @@ def _pick_npcs(area_id, npcs, count, exclude=None):
     return random.sample(pool, count)
 
 
-def generate_mystery(area_id, npcs, areas, kind="murder"):
-    """Build a case from local NPCs."""
-    here = _pick_npcs(area_id, npcs, 4)
-    if len(here) < 2:
-        return None
+def _victim_exclusions(player, present_ids):
+    """NPCs who must never be chosen as a murder victim."""
+    exclude = set(present_ids or [])
+    focus = player.get("scene_focus")
+    if focus:
+        exclude.add(focus)
+    pipeline = player.get("starting_pipeline") or {}
+    for nid in pipeline.get("key_npc_ids") or []:
+        if nid in present_ids:
+            exclude.add(nid)
+    return exclude
 
-    victim = random.choice(here)
+
+def _pick_victim(area_id, npcs, player, present_ids):
+    """
+    Murder victim must be dead (or marked dead off-screen) and never someone
+    the player is currently talking to or can see.
+    """
+    exclude = _victim_exclusions(player, present_ids)
+
+    dead_here = [
+        n for n in npcs.values()
+        if n.get("status") == "dead"
+        and n.get("area") == area_id
+        and n["id"] not in exclude
+    ]
+    if dead_here:
+        return random.choice(dead_here), False
+
+    off_screen = [
+        n for n in npcs.values()
+        if n.get("status") == "alive"
+        and n.get("area") == area_id
+        and n["id"] not in exclude
+    ]
+    if not off_screen:
+        return None, False
+
+    victim = random.choice(off_screen)
+    victim["status"] = "dead"
+    return victim, True
+
+
+def generate_mystery(area_id, npcs, areas, *, player=None, present_ids=None, kind="murder"):
+    """Build a case from local NPCs."""
+    player = player or {}
+    present_ids = present_ids or []
+    victim, npcs_changed = _pick_victim(area_id, npcs, player, present_ids)
+    if not victim:
+        return None, npcs_changed
+
+    here = _pick_npcs(area_id, npcs, 4, exclude={victim["id"]})
+    if len(here) < 1:
+        return None, npcs_changed
+
     others = [n for n in here if n["id"] != victim["id"]]
-    suspects = random.sample(others, k=min(2, len(others)))
+    suspects = random.sample(others, k=min(2, len(others))) if others else []
     witnesses = [n for n in others if n not in suspects][:2]
 
     evidence = []
@@ -55,9 +104,13 @@ def generate_mystery(area_id, npcs, areas, kind="murder"):
 
     case = {
         "id": str(uuid.uuid4())[:8],
-        "kind": kind,
+        "kind": "murder",
         "area_id": area_id,
-        "title": f"Death in {areas.get(area_id, {}).get('name', 'the district')}" if kind == "murder" else "Local mystery",
+        "title": (
+            f"Death in {areas.get(area_id, {}).get('name', 'the district')}"
+            if kind == "murder"
+            else "Local mystery"
+        ),
         "stage": 0,
         "stages": ["learn what happened", "identify suspects", "find proof", "accuse or expose"],
         "victim_id": victim["id"],
@@ -68,20 +121,22 @@ def generate_mystery(area_id, npcs, areas, kind="murder"):
         "solved": False,
         "accused_id": None,
     }
-    return case
+    return case, npcs_changed
 
 
-def ensure_case(player, area_id, npcs, areas):
+def ensure_case(player, area_id, npcs, areas, *, present_ids=None):
     """Return active case or generate one on first investigation."""
     case = player.get("active_case")
     if case and not case.get("solved") and case.get("area_id") == area_id:
-        return case
+        return case, False
     if case and not case.get("solved"):
-        return case
-    new_case = generate_mystery(area_id, npcs, areas)
+        return case, False
+    new_case, npcs_changed = generate_mystery(
+        area_id, npcs, areas, player=player, present_ids=present_ids,
+    )
     if new_case:
         player["active_case"] = new_case
-    return new_case
+    return new_case, npcs_changed
 
 
 def advance_case(player, action_kind, action_ctx, npcs):
@@ -128,18 +183,38 @@ def advance_case(player, action_kind, action_ctx, npcs):
     return " ".join(notes)
 
 
-def case_narrator_block(player, npcs):
+def case_narrator_block(player, npcs, *, present_ids=None):
     case = player.get("active_case")
     if not case or case.get("solved"):
         return ""
-    victim = npcs.get(case.get("victim_id"), {}).get("name", "someone")
+    present_ids = set(present_ids or [])
+    victim_id = case.get("victim_id")
+    victim_rec = npcs.get(victim_id, {})
+    victim_alive = victim_rec.get("status") == "alive"
+    victim_present = victim_id in present_ids
+    victim_name = case.get("victim_name") or victim_rec.get("name", "someone")
+
+    if victim_alive and victim_present:
+        victim_line = (
+            "An off-screen death in this district — do NOT treat anyone present as the corpse. "
+            f"The case file names {victim_name} as victim, but that person is alive here; "
+            "clues must come from the environment, not from them narrating the mystery."
+        )
+    elif victim_alive:
+        victim_line = f"victim {victim_name} (off-screen, not present)"
+    else:
+        victim_line = f"victim {victim_name} (dead — body or aftermath only, no dialogue from them)"
+
     discovered = [e for e in case.get("evidence", []) if e.get("discovered")]
     lines = [
-        f"ACTIVE MYSTERY ({case.get('title', 'case')}): victim {victim}; "
+        f"ACTIVE MYSTERY ({case.get('title', 'case')}): {victim_line}; "
         f"stage {case.get('stage', 0)+1}/4 — {case['stages'][min(case.get('stage', 0), 3)]}.",
     ]
     if discovered:
-        lines.append("Known clues: " + "; ".join(e["text"][:60] for e in discovered[:3]))
+        lines.append(
+            "Known clues (show as physical/overheard finds — not NPC monologue): "
+            + "; ".join(e["text"][:60] for e in discovered[:3])
+        )
     suspect_names = [npcs.get(s, {}).get("name", "?") for s in case.get("suspect_ids", [])[:3]]
     if suspect_names:
         lines.append(f"Suspects (do not invent others): {', '.join(suspect_names)}.")

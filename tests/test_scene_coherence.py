@@ -5,7 +5,7 @@ import pytest
 from simulation.action_interpreter import interpret_action
 from simulation.local_places import resolve_local_movement, looks_like_local_movement
 from simulation.scene_coherence import resolve_travel_destination, place_label
-from simulation.target_resolution import resolve_action_target, resolve_investigate_target
+from simulation.target_resolution import resolve_action_target
 
 
 def _npc(nid, role="soldier", gender="male", name="Bob"):
@@ -91,12 +91,17 @@ def test_place_label_includes_subplace():
     assert "heavy door" in place_label(player, area)
 
 
-def test_investigate_targets_role_in_text():
+def test_investigate_is_environment_only_even_with_role_hint():
+    from simulation.scene_cast import select_scene_cast
+
     soldier = _npc("s1", role="soldier")
     priest = _npc("p1", role="priest")
     player = {"scene_focus": "s1"}
-    target = resolve_investigate_target("investigate the priest's behavior", player, [soldier, priest])
-    assert target["id"] == "p1"
+    action_ctx = {"kind": "investigate"}
+    focus, note, focal_id = select_scene_cast([soldier, priest], player, action_ctx)
+    assert focus == []
+    assert focal_id is None
+    assert "Environment-only" in note
 
 
 def test_looks_like_local_movement():

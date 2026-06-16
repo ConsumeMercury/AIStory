@@ -108,7 +108,7 @@ def test_investigation_flow():
     npcs = load("characters/npcs.json", {})
     areas = load("world/areas.json", {})
     area_id = player.get("area") or next(iter(areas))
-    case = ensure_case(player, area_id, npcs, areas)
+    case = ensure_case(player, area_id, npcs, areas)[0]
     if case:
         note = advance_case(player, "investigate", {"skill_check": {"success": True, "margin": 2}}, npcs)
         assert isinstance(note, str)

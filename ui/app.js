@@ -206,6 +206,29 @@ function renderDeltaPanel(turn) {
   }
 }
 
+function renderMemoryDebug(memory) {
+  const body = $("#delta-body");
+  if (!body || !memory) return;
+  const used = memory.tokens_used || {};
+  const cap = memory.tokens_cap || {};
+  const evictions = memory.evictions || [];
+  const rows = Object.keys(cap).map(
+    (k) => `<div class="delta-prose-issue">${esc(k)}: ${used[k] || 0} / ${cap[k] || "?"} tokens</div>`,
+  );
+  const block = `
+    <div class="delta-section delta-prose-debug">
+      <div class="delta-section-label">Memory budget</div>
+      ${rows.join("")}
+      ${evictions.length ? `<div class="delta-section-label">Evictions</div>${evictions.map((e) => `<div class="delta-prose-issue">${esc(e)}</div>`).join("")}` : ""}
+    </div>`;
+  const empty = body.querySelector(".delta-empty");
+  if (empty) {
+    body.innerHTML = block;
+    return;
+  }
+  body.insertAdjacentHTML("beforeend", block);
+}
+
 function renderProseValidationDebug(issues) {
   const body = $("#delta-body");
   if (!body || !issues?.length) return;
@@ -945,6 +968,9 @@ function applyResult(result) {
   }
   if (result?.debug?.prose_issues?.length) {
     renderProseValidationDebug(result.debug.prose_issues);
+  }
+  if (result?.debug?.memory_debug) {
+    renderMemoryDebug(result.debug.memory_debug);
   }
   if (result?.state) {
     state = result.state;

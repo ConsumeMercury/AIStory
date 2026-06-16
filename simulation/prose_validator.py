@@ -293,6 +293,39 @@ def build_beat_context(last, player, npcs):
     return ctx
 
 
+def active_case_living_victim_issue(player, npcs, present_npcs):
+    """Flag when murder case names a living present NPC as victim."""
+    case = player.get("active_case")
+    if not case or case.get("solved"):
+        return None
+    victim_id = case.get("victim_id")
+    if not victim_id:
+        return None
+    victim = (npcs or {}).get(victim_id, {})
+    if victim.get("status") != "alive":
+        return None
+    present_ids = {n.get("id") for n in (present_npcs or [])}
+    focus = player.get("scene_focus")
+    if victim_id in present_ids or victim_id == focus:
+        name = case.get("victim_name") or victim.get("name") or victim_id
+        return (
+            f"active case names living NPC {name!r} as murder victim "
+            f"while they are present or in conversation"
+        )
+    return None
+
+
+def investigate_focal_issue(action_ctx, focal_npc_id, focus_npcs):
+    """Investigate beats must not carry a dialogue focal NPC."""
+    if (action_ctx or {}).get("kind") != "investigate":
+        return None
+    if focal_npc_id or focus_npcs:
+        return "investigate beat has a focal NPC — should be environment-only"
+    if (action_ctx or {}).get("target_id"):
+        return "investigate beat has target_id — should be environment-only"
+    return None
+
+
 def focus_role_switch_issue(player, action_ctx, journal, npcs):
     """Flag when a role address resolves to a different NPC than the last dialogue partner."""
     from simulation.target_resolution import action_mentions_role_or_descriptor
@@ -340,6 +373,12 @@ def validate_scene_prose(text, *, player, npcs, action_ctx, focal_npc_id,
     )
     if switch:
         issues.append(switch)
+    living_victim = active_case_living_victim_issue(player, npcs, present_npcs)
+    if living_victim:
+        issues.append(living_victim)
+    inv_focal = investigate_focal_issue(action_ctx, focal_npc_id, present_npcs)
+    if inv_focal:
+        issues.append(inv_focal)
     return issues
 
 

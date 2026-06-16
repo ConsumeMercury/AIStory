@@ -153,7 +153,7 @@ def seed_starting_pipeline(player, area_id, areas, npcs):
 
     if should_seed_opening_case(player):
         kind = "murder" if "murder" in (player.get("motivation") or "").lower() else "mystery"
-        case = generate_mystery(area_id, npcs, areas, kind=kind)
+        case, _ = generate_mystery(area_id, npcs, areas, player=player, kind=kind)
         if case:
             player["active_case"] = case
 

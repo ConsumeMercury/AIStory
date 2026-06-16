@@ -26,6 +26,7 @@ from simulation.immersion_context import (
 from simulation.novel_craft import CRAFT_CORE, craft_for_kind, narrative_outcome, token_budget_for_kind
 from simulation.generation_guardrails import guardrails_prompt_block, build_hard_constraints_block
 from simulation.gemini_client import generate_text, generate_text_stream
+from simulation.memory_context import build_memory_context
 from storage import load
 
 DEBUG_TOKENS = os.environ.get("AISTORY_DEBUG_TOKENS", "").lower() in ("1", "true", "yes")
@@ -257,6 +258,15 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
         action_kind=kind,
     )
     ledger_block = build_conversation_ledger(player, journal, focal_npc_id, action_context)
+    present_ids = [n.get("id") for n in (present_npcs or []) if n.get("id")]
+    npcs_all = load("characters/npcs.json", {})
+    memory_block, memory_debug = build_memory_context(
+        player,
+        npcs_all,
+        memories,
+        focal_npc_id=focal_npc_id,
+        present_ids=present_ids,
+    )
     inv_facts = build_inventory_facts(player, action_context or {})
     facts_parts = [p for p in (inv_facts,) if p]
     if action_context:
@@ -314,11 +324,6 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
             )
             if whisper:
                 extras.append(whisper)
-        if memories:
-            from simulation.immersion_context import format_world_echoes
-            echo = format_world_echoes(memories[:5])
-            if echo:
-                extras.append(echo)
         if extras:
             immersion = "\n" + "\n\n".join(extras) + "\n"
 
@@ -335,6 +340,7 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
         length_block,
         mode_block,
         continuity_block,
+        memory_block,
         ledger_block,
         scene_facts,
         f"SCENE:\nSetting: {setting}. Place: {place}.",
@@ -352,7 +358,7 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
         "Write the scene now. Literary novel prose only — obey HARD CONSTRAINTS, "
         "CRAFT, SCENE MODE, and DO NOT REPEAT.",
     )
-    return prompt, token_budget, focal_npc_id
+    return prompt, token_budget, focal_npc_id, memory_debug
 
 
 def generate_scene(player_action, world, player, present_npcs,
@@ -364,7 +370,7 @@ def generate_scene(player_action, world, player, present_npcs,
                    immersion_block="",
                    focal_npc_id=None, scene_place=None, hard_constraints="",
                    on_prose_chunk=None):
-    prompt, token_budget, _focal_id = assemble_scene_prompt(
+    prompt, token_budget, _focal_id, _memory_debug = assemble_scene_prompt(
         player_action, world, player, present_npcs,
         memories, rumors=rumors, new_npcs=new_npcs,
         known_ids=known_ids, relationships=relationships, extra_directive=extra_directive,
@@ -382,6 +388,8 @@ def generate_scene(player_action, world, player, present_npcs,
         print("======================\n")
 
     gen_kwargs = dict(max_tokens=token_budget, temperature=0.82, top_p=0.9)
+    if action_context is not None:
+        action_context["memory_debug"] = _memory_debug
     if on_prose_chunk:
         return generate_text_stream(prompt, on_chunk=on_prose_chunk, **gen_kwargs)
     return generate_text(prompt, **gen_kwargs)

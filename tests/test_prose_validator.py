@@ -81,6 +81,27 @@ def test_log_scene_prose_issues_warns_but_does_not_raise(caplog):
     assert any("prose validation" in r.message for r in caplog.records)
 
 
+def test_investigate_focal_issue():
+    from simulation.prose_validator import investigate_focal_issue
+
+    issue = investigate_focal_issue({"kind": "investigate"}, "p1", [{"id": "p1"}])
+    assert issue is not None
+    assert "environment-only" in issue
+
+
+def test_active_case_living_victim_issue():
+    from simulation.prose_validator import active_case_living_victim_issue
+
+    npcs = {"fahir": _npc("fahir", name="Fahir al-Zahir")}
+    player = {
+        "scene_focus": "fahir",
+        "active_case": {"victim_id": "fahir", "victim_name": "Fahir al-Zahir", "solved": False},
+    }
+    issue = active_case_living_victim_issue(player, npcs, [npcs["fahir"]])
+    assert issue is not None
+    assert "living NPC" in issue
+
+
 def test_prose_issues_recorded_in_turn_trace(monkeypatch):
     from unittest.mock import MagicMock, patch
 

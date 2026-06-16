@@ -122,10 +122,13 @@ def select_scene_cast(present, player, action_ctx, max_focus=1):
             "One short beat of frustration or re-orientation only."
         ), None
 
-    if kind == "investigate" and not action_ctx.get("target_id"):
+    if kind == "investigate":
+        action_ctx["target_id"] = None
         return [], (
             "Environment-only investigation. Describe place, objects, sounds, contradictions. "
             "Do NOT invent new named NPCs (no priests, clerks, or strangers with dialogue). "
+            "Do NOT give dialogue to anyone the protagonist was just talking to — clues are physical, "
+            "overheard, or written, not speeches from a conversation partner. "
             "Background crowd is faceless — no speeches."
         ), None
 

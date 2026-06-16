@@ -25,7 +25,6 @@ from simulation.scene_coherence import (
     DIALOGUE_KINDS,
 )
 from simulation.local_places import resolve_local_movement
-from simulation.target_resolution import resolve_investigate_target
 from simulation.generation_guardrails import build_hard_constraints_block
 from simulation.prose_validator import log_scene_prose_issues
 from simulation.npc_continuity import ensure_npc_continuity_locks
@@ -39,7 +38,7 @@ from simulation.appearance_impression import record_first_impression
 from simulation.scene_cast import select_scene_cast, pick_name_target
 from simulation.scene_events import maybe_scene_event
 from simulation.immersion_context import (
-    format_rumor_whispers, format_world_echoes, build_player_inner_voice,
+    format_rumor_whispers, build_player_inner_voice,
 )
 from simulation.economy_engine import resolve_trade, resolve_give
 from simulation.travel_digest import snapshot_before_travel, build_arrival_digest
@@ -260,7 +259,7 @@ def _skip_ambient_event(kind, player, journal):
     return False
 
 
-def _immersion_block(kind, player, world, action_ctx, rumors, events, action):
+def _immersion_block(kind, player, world, action_ctx, rumors, events, action, *, present_ids=None):
     """Lighter context on dialogue beats; minimal on first arrival."""
     journal = player.get("journal") or []
     if action_ctx.get("absent_npc"):
@@ -281,7 +280,6 @@ def _immersion_block(kind, player, world, action_ctx, rumors, events, action):
 
     areas = load(AREAS_FILE, {})
     area = areas.get(player.get("area"), {})
-    relevant = get_relevant_memories(events, action, limit=3)
     from simulation.goal_events import goal_narrator_note
     from simulation.hunting_engine import hunt_narrator_block, guild_contract_block
     from simulation.institution_membership import institution_narrator_block
@@ -292,7 +290,6 @@ def _immersion_block(kind, player, world, action_ctx, rumors, events, action):
         institution_narrator_block(player, player.get("area"), load("world/institutions.json", {})),
         guild_contract_block(player) if kind in ("guild", "trade", "talk") else "",
         format_rumor_whispers(rumors, city=player.get("location"), area_name=area.get("name")),
-        format_world_echoes(relevant),
         build_player_inner_voice(player, world, action_ctx, journal),
         format_drama_block(player.get("area"), load(NPC_FILE, {})),
         history_block(world),
@@ -300,7 +297,7 @@ def _immersion_block(kind, player, world, action_ctx, rumors, events, action):
         starting_pipeline_narrator_block(player),
         district_narrator_block(player.get("area"), areas),
         politics_narrator_block(player.get("area"), load("world/institutions.json", {}), load(NPC_FILE, {})),
-        case_narrator_block(player, load(NPC_FILE, {})),
+        case_narrator_block(player, load(NPC_FILE, {}), present_ids=present_ids or []),
         legacy_narrator_block(player),
     ]
     return "\n\n".join(p for p in parts if p)
@@ -365,15 +362,16 @@ def process_player_action(action, *, on_prose_chunk=None):
                 + " No one matching that description is here — show a failed search."
             ).strip()
 
-    if kind == "investigate" and not action_ctx.get("target_id"):
-        inv_target = resolve_investigate_target(action, player, present)
-        if inv_target:
-            action_ctx["target_id"] = inv_target["id"]
-            action_ctx["story_directive"] = (
-                action_ctx.get("story_directive", "")
-                + f" Focal investigator contact: {inv_target.get('name') or inv_target.get('role', 'someone')} "
-                f"({inv_target.get('role', 'stranger')}) — only they may speak if dialogue occurs."
-            ).strip()
+    if kind == "investigate":
+        action_ctx["target_id"] = None
+        player["scene_focus"] = None
+        action_ctx["story_directive"] = (
+            action_ctx.get("story_directive", "")
+            + " Environment-only — physical clues, overheard fragments, contradictions in objects. "
+            "No focal NPC dialogue; do not resume the last conversation."
+        ).strip()
+        with state_lock():
+            save(PLAYER_FILE, player)
 
     if kind == "withdraw":
         prev_focus = player.get("scene_focus")
@@ -520,7 +518,7 @@ def process_player_action(action, *, on_prose_chunk=None):
             "talk", "personal_talk", "help", "give", "ask_name",
             "threaten", "insult", "trade", "show_respect", "find", "guild",
             "explore", "attack", "confess", "search",
-            "ask_about", "investigate", "accuse", "blackmail",
+            "ask_about", "accuse", "blackmail",
         ):
             player["scene_focus"] = action_ctx["target_id"]
         to_introduce = _update_known(player, present, tick)
@@ -609,7 +607,10 @@ def process_player_action(action, *, on_prose_chunk=None):
 
     if kind in ("investigate", "ask_about", "accuse", "blackmail"):
         areas_data = load(AREAS_FILE, {})
-        ensure_case(player, player.get("area"), npcs, areas_data)
+        present_ids = [n["id"] for n in present]
+        _, npcs_changed = ensure_case(
+            player, player.get("area"), npcs, areas_data, present_ids=present_ids,
+        )
         case_note = advance_case(player, kind, action_ctx, npcs)
         inv_dir, _, _sec = build_investigation_context(
             action, player, present, world, action_ctx,
@@ -621,7 +622,8 @@ def process_player_action(action, *, on_prose_chunk=None):
             ).strip()
         with state_lock():
             save(PLAYER_FILE, player)
-            save(NPC_FILE, npcs)
+            if npcs_changed:
+                save(NPC_FILE, npcs)
 
     if kind == "hunt":
         areas_data = load(AREAS_FILE, {})
@@ -750,7 +752,10 @@ def process_player_action(action, *, on_prose_chunk=None):
     relationships = load("characters/relationships.json", {})
     rels_toward_player = {nid: relationships.get(nid, {}).get("player", {}) for nid in focus_id_list}
 
-    immersion_block = _immersion_block(kind, player, world, action_ctx, rumors, events, action)
+    immersion_block = _immersion_block(
+        kind, player, world, action_ctx, rumors, events, action,
+        present_ids=[n["id"] for n in present],
+    )
     rival_note = rival_directive(player, npcs)
     if rival_note:
         immersion_block = (immersion_block + "\n\n" + rival_note).strip() if immersion_block else rival_note
@@ -797,7 +802,11 @@ def process_player_action(action, *, on_prose_chunk=None):
         world=world,
         player=player,
         present_npcs=focus_npcs,
-        memories=get_relevant_memories(events, action, limit=15),
+        memories=get_relevant_memories(
+            events, action, limit=15,
+            player=player, area=player.get("area"),
+            focal_npc_id=focal_id,
+        ),
         rumors=rumors[-5:] if rumors else [],
         new_npcs=intro_for_scene,
         known_ids=known_ids,
@@ -838,9 +847,12 @@ def process_player_action(action, *, on_prose_chunk=None):
     with state_lock():
         player = load(PLAYER_FILE, {})
         update_player_goals(player, kind, action_ctx, world)
-        focus_npc = action_ctx.get("target_id")
-        if not focus_npc and not action_ctx.get("find_failed"):
-            focus_npc = player.get("scene_focus")
+        if kind == "investigate":
+            focus_npc = None
+        else:
+            focus_npc = action_ctx.get("target_id")
+            if not focus_npc and not action_ctx.get("find_failed"):
+                focus_npc = player.get("scene_focus")
         journal_areas = load(AREAS_FILE, {})
         journal_area = journal_areas.get(player.get("area"), {})
         journal_place = place_label(player, journal_area)
@@ -855,7 +867,7 @@ def process_player_action(action, *, on_prose_chunk=None):
             "focus_npc": focus_npc,
             "combat_fatal": action_ctx.get("combat_fatal") if kind == "attack" else player.get("last_combat_fatal"),
         })
-        maybe_compact_journal(player)
+        maybe_compact_journal(player, npcs)
         player["journal"] = player["journal"][-300:]
         save(PLAYER_FILE, player)
 
@@ -872,6 +884,7 @@ def process_player_action(action, *, on_prose_chunk=None):
         scene_preview=(scene or "")[:240],
         area_arrival=area_arrival,
         prose_issues=prose_issues or None,
+        memory_debug=action_ctx.get("memory_debug"),
     )
 
     return scene

@@ -69,7 +69,13 @@ def test_ask_name_interpret_does_not_quote_meta_phrase():
     assert "priest for her name" not in ctx["player_speech"].lower()
 
 
-def test_stream_piece_merge_preserves_word_boundary():
+def test_stream_raw_join_preserves_model_spacing():
+    assert "".join(["trest", "le"]) == "trestle"
+    assert "".join(["from", " her"]) == "from her"
+    assert "".join(["from", "her"]) == "fromher"
+
+
+def test_stream_piece_merge_legacy_heuristic():
     parts = ["from"]
     out = _append_stream_piece(parts, "her")
     assert out == " her"

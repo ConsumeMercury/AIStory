@@ -54,7 +54,7 @@ def test_prompt_assembly_golden_sections(golden_sections):
     }
     hard = build_hard_constraints_block("p1", npc, "Temple Row — the heavy door", {"kind": "talk"})
 
-    prompt, token_budget, focal_id = assemble_scene_prompt(
+    prompt, token_budget, focal_id, _memory_debug = assemble_scene_prompt(
         "Talk to the priest",
         world,
         player,

@@ -79,6 +79,18 @@ def _finish_reason(response):
     return None
 
 
+def _extract_stream_piece(response):
+    """Extract one stream delta without stripping — preserve model spacing."""
+    parts = []
+    for cand in getattr(response, "candidates", None) or []:
+        content = getattr(cand, "content", None)
+        for part in getattr(content, "parts", None) or []:
+            part_text = getattr(part, "text", None)
+            if part_text and not getattr(part, "thought", False):
+                parts.append(part_text)
+    return "".join(parts)
+
+
 def _extract_text(response):
     text = getattr(response, "text", None)
     if text and str(text).strip():
@@ -158,7 +170,7 @@ def _call_with_retries(client, model, prompt, *, cap, temperature, top_p):
 
 
 def _append_stream_piece(parts, piece):
-    """Join stream deltas without losing word boundaries."""
+    """Deprecated — kept for regression tests. Streaming joins raw deltas now."""
     if not piece:
         return None
     if parts:
@@ -212,11 +224,11 @@ def generate_text_stream(prompt, *, temperature=0.78, top_p=0.88, max_tokens=Non
                 )
                 for chunk in stream:
                     last_response = chunk
-                    piece = _extract_text(chunk)
+                    piece = _extract_stream_piece(chunk)
                     if not piece:
                         continue
-                    piece = _append_stream_piece(parts, piece)
-                    if on_chunk and piece:
+                    parts.append(piece)
+                    if on_chunk:
                         on_chunk(piece)
                 text = "".join(parts).strip()
                 if not text:

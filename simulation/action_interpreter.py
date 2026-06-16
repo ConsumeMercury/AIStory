@@ -394,8 +394,9 @@ def interpret_action(action, player, present_npcs, world, npcs=None):
         ctx["memory_tag"] = "observation"
         ctx["skill_xp"] = ("appraisal", 8)
         ctx["story_directive"] = (
-            "Active investigation — compare witness accounts, physical detail, contradictions. "
-            "Build toward a conclusion, not a info dump."
+            "Environment-only investigation — physical evidence, overheard fragments, "
+            "contradictions in objects and surroundings. "
+            "No focal NPC dialogue; clues are found, not told."
         )
 
     elif kind == "ask_about":
