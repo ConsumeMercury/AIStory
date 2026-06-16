@@ -31,15 +31,11 @@ UI_DIR = BASE_DIR / "ui"
 
 @asynccontextmanager
 async def lifespan(app):
-    from simulation.world_patch import ensure_world_extensions
-    from simulation import simulation_runner
-    from game.setup import ensure_world_data
+    from game.bootstrap import start_bootstrap, stop_bootstrap
 
-    ensure_world_data()
-    ensure_world_extensions()
-    simulation_runner.start()
+    start_bootstrap()
     yield
-    simulation_runner.stop()
+    stop_bootstrap()
 
 
 def _cors_origins():
@@ -119,6 +115,17 @@ def create_app():
     class SaveSlotBody(BaseModel):
         label: str = ""
 
+    def _require_boot_ready():
+        from game.bootstrap import boot_ready, boot_status
+
+        if boot_ready():
+            return
+        boot = boot_status()
+        raise HTTPException(
+            status_code=503,
+            detail=boot["error"] or "World is still generating. Please wait…",
+        )
+
     @app.get("/api/saves")
     def list_save_slots():
         from game.save_slots import list_slots
@@ -174,6 +181,7 @@ def create_app():
 
     @app.get("/api/setup")
     def setup_info():
+        _require_boot_ready()
         info = get_starting_info()
         return {
             "has_character": has_player(),
@@ -186,6 +194,7 @@ def create_app():
 
     @app.post("/api/character")
     def create_character(body: CharacterBody):
+        _require_boot_ready()
         if has_player():
             raise HTTPException(status_code=409, detail="A character already exists.")
         try:
@@ -210,14 +219,21 @@ def create_app():
 
     @app.get("/api/health")
     def health():
+        from game.bootstrap import boot_status
+
+        boot = boot_status()
         return {
-            "ok": True,
+            "ok": boot["ready"] and not boot["error"],
+            "booting": not boot["ready"] and not boot["error"],
+            "boot_status": boot["status"],
+            "boot_error": boot["error"],
             "gemini_configured": bool(api_key()),
             "has_character": has_player(),
         }
 
     @app.get("/api/state")
     def state():
+        _require_boot_ready()
         if not has_player():
             raise HTTPException(status_code=404, detail="No character yet. Create one in the browser.")
         data = get_full_state()
@@ -254,6 +270,7 @@ def create_app():
 
     @app.post("/api/opening")
     def opening():
+        _require_boot_ready()
         if not api_key():
             raise HTTPException(
                 status_code=503,
@@ -279,6 +296,7 @@ def create_app():
 
     @app.post("/api/action")
     def action(body: ActionBody):
+        _require_boot_ready()
         text = (body.text or "").strip()
         if not text:
             raise HTTPException(status_code=400, detail="Empty action.")
@@ -316,6 +334,7 @@ def create_app():
 
         from fastapi.responses import StreamingResponse
 
+        _require_boot_ready()
         text = (body.text or "").strip()
         if not text:
             raise HTTPException(status_code=400, detail="Empty action.")

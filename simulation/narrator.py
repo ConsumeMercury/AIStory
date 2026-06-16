@@ -275,6 +275,9 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
     inv_facts = build_inventory_facts(player, action_context or {})
     facts_parts = [p for p in (inv_facts,) if p]
     if action_context:
+        presence = action_context.get("presence_facts")
+        if presence:
+            facts_parts.insert(0, presence)
         if action_context.get("confession_facts") and kind == "confess":
             facts_parts.insert(0, action_context["confession_facts"])
         if kind in ("search", "confess") and player.get("last_combat_target"):

@@ -26,7 +26,13 @@ from simulation.scene_coherence import (
 )
 from simulation.local_places import resolve_local_movement, record_narrator_places
 from simulation.generation_guardrails import build_hard_constraints_block
-from simulation.prose_validator import log_scene_prose_issues
+from simulation.prose_validator import (
+    log_scene_prose_issues,
+    validate_scene_prose,
+    build_prose_correction_block,
+    queue_prose_correction,
+    prose_retry_limit,
+)
 from simulation.npc_continuity import ensure_npc_continuity_locks
 from simulation.journal_summary import maybe_compact_journal
 from simulation.narrative_continuity import update_npc_narrative_cache
@@ -73,13 +79,24 @@ from simulation.action_resolution import (
     pick_explore_hook,
     try_acquire_item,
     resolve_find_person,
+    build_scene_presence_facts,
     build_find_facts,
+    build_find_failed_facts,
+    resolve_npc_by_name_query,
+    extract_find_name_query,
     resolve_confession_respondent,
     build_combat_facts,
     build_inventory_facts,
     build_confession_facts,
     build_post_combat_facts,
     resolve_pronoun_target,
+)
+from simulation.target_ambiguity import (
+    detect_target_ambiguity,
+    resolve_clarification_pick,
+    set_pending_clarification,
+    clear_pending_clarification,
+    build_clarification_scene,
 )
 
 WORLD_FILE = "world/world_state.json"
@@ -155,6 +172,115 @@ def _area_context(player):
     locs = load(LOC_FILE, {})
     mod = city_check_modifier(player.get("location"), locs)
     return {"check_modifier": mod}
+
+
+def _generate_scene_with_validation(
+    *,
+    action,
+    world,
+    player,
+    focus_npcs,
+    events,
+    rumors,
+    intro_for_scene,
+    known_ids,
+    rels_toward_player,
+    extra_directive,
+    area_arc,
+    tick,
+    action_ctx,
+    name_reveal,
+    focus_id_list,
+    crowd_note,
+    scene_event,
+    immersion_block,
+    focal_id,
+    scene_place,
+    hard_constraints,
+    on_prose_chunk,
+    npcs,
+):
+    """Generate scene prose; retry once when post-validation finds fact violations."""
+    kwargs = dict(
+        player_action=action,
+        world=world,
+        player=player,
+        present_npcs=focus_npcs,
+        memories=get_relevant_memories(
+            events, action, limit=15,
+            player=player, area=player.get("area"),
+            focal_npc_id=focal_id,
+        ),
+        rumors=rumors[-5:] if rumors else [],
+        new_npcs=intro_for_scene,
+        known_ids=known_ids,
+        relationships=rels_toward_player,
+        extra_directive=extra_directive,
+        local_arc=area_arc,
+        tick=tick,
+        action_context=action_ctx,
+        name_reveal=name_reveal,
+        locals_know_player_name=locals_know_name(player, focus_id_list),
+        crowd_note=crowd_note,
+        scene_event=scene_event,
+        immersion_block=immersion_block,
+        focal_npc_id=focal_id,
+        scene_place=scene_place,
+        hard_constraints=hard_constraints,
+        on_prose_chunk=on_prose_chunk,
+    )
+
+    scene = get_narrator().generate_scene(**kwargs)
+    if not scene or len(scene) < 40:
+        return scene, []
+
+    issues = validate_scene_prose(
+        scene,
+        player=player,
+        npcs=npcs,
+        action_ctx=action_ctx,
+        focal_npc_id=focal_id,
+        scene_place=scene_place,
+        present_npcs=focus_npcs,
+        known_ids=known_ids,
+    )
+    retries = prose_retry_limit()
+    attempt = 0
+    while issues and attempt < retries:
+        attempt += 1
+        correction = build_prose_correction_block(issues)
+        merged = ((extra_directive or "") + "\n\n" + correction).strip()
+        action_ctx["prose_retry"] = attempt
+        scene = get_narrator().generate_scene(
+            **{**kwargs, "extra_directive": merged, "on_prose_chunk": None},
+        )
+        issues = validate_scene_prose(
+            scene,
+            player=player,
+            npcs=npcs,
+            action_ctx=action_ctx,
+            focal_npc_id=focal_id,
+            scene_place=scene_place,
+            present_npcs=focus_npcs,
+            known_ids=known_ids,
+        )
+
+    if issues:
+        log_scene_prose_issues(
+            scene,
+            player=player,
+            npcs=npcs,
+            action_ctx=action_ctx,
+            focal_npc_id=focal_id,
+            scene_place=scene_place,
+            present_npcs=focus_npcs,
+            known_ids=known_ids,
+        )
+        with state_lock():
+            pl = load(PLAYER_FILE, {})
+            queue_prose_correction(pl, issues)
+            save(PLAYER_FILE, pl)
+    return scene, issues
 
 
 def _do_combat(player, npcs, monsters, present, tick, action, action_ctx):
@@ -327,6 +453,17 @@ def process_player_action(action, *, on_prose_chunk=None):
     area_before = player.get("area")
     present = _present_npcs(npcs, player)
     sync_scene_focus(player, present, npcs)
+
+    forced_kind = None
+    forced_target_id = None
+    clarified_kind, clarified_id = resolve_clarification_pick(action, player, present, npcs)
+    if clarified_id:
+        forced_kind = clarified_kind
+        forced_target_id = clarified_id
+        clear_pending_clarification(player)
+        with state_lock():
+            save(PLAYER_FILE, player)
+
     if player.get("active_case") and not player["active_case"].get("solved"):
         areas_for_case = load(AREAS_FILE, {})
         _, case_changed = sanitize_active_case(
@@ -339,6 +476,12 @@ def process_player_action(action, *, on_prose_chunk=None):
 
     action_ctx = interpret_action(action, player, present, world, npcs=npcs)
     kind = action_ctx["kind"]
+    if forced_kind:
+        action_ctx["kind"] = forced_kind
+        kind = forced_kind
+    if forced_target_id:
+        action_ctx["target_id"] = forced_target_id
+        action_ctx["clarification_resolved"] = True
 
     with state_lock():
         world = load(WORLD_FILE, {})
@@ -355,6 +498,9 @@ def process_player_action(action, *, on_prose_chunk=None):
         if hook and not action_ctx.get("target_id"):
             action_ctx["target_id"] = hook["id"]
             action_ctx["explore_hook"] = True
+            player["scene_focus"] = hook["id"]
+            with state_lock():
+                save(PLAYER_FILE, player)
 
     if kind == "find":
         found = resolve_find_person(action, player, present, npcs)
@@ -367,11 +513,20 @@ def process_player_action(action, *, on_prose_chunk=None):
                 ).strip()
         else:
             action_ctx["target_id"] = None
-            action_ctx["find_failed"] = True
-            action_ctx["story_directive"] = (
-                action_ctx.get("story_directive", "")
-                + " No one matching that description is here — show a failed search."
-            ).strip()
+            from simulation.target_ambiguity import collect_description_matches
+            query_npc = resolve_npc_by_name_query(action, npcs, player)
+            if len(collect_description_matches(action, present)) <= 1:
+                action_ctx["find_failed"] = True
+                query = extract_find_name_query(action)
+                fail_facts = build_find_failed_facts(query_npc, query=query)
+                action_ctx["story_directive"] = (
+                    action_ctx.get("story_directive", "")
+                    + " "
+                    + fail_facts
+                    + " Show a failed search — do not award weapons or loot."
+                ).strip()
+                if query_npc:
+                    action_ctx["find_target_absent"] = query_npc.get("id")
 
     if kind == "investigate":
         action_ctx["target_id"] = None
@@ -414,6 +569,27 @@ def process_player_action(action, *, on_prose_chunk=None):
         pron = resolve_pronoun_target(action, player, present)
         if pron:
             action_ctx["target_id"] = pron["id"]
+
+    if (
+        not action_ctx.get("target_id")
+        and not action_ctx.get("absent_npc")
+        and not action_ctx.get("clarification_resolved")
+    ):
+        ambiguity = detect_target_ambiguity(
+            action, player, present, npcs, kind,
+            target_id=action_ctx.get("target_id"),
+        )
+        if ambiguity:
+            action_ctx["target_ambiguous"] = True
+            action_ctx.pop("find_failed", None)
+            set_pending_clarification(player, ambiguity)
+            action_ctx["story_directive"] = (
+                action_ctx.get("story_directive", "")
+                + " TARGET UNCLEAR — no violence or directed dialogue resolved yet. "
+                "Protagonist must choose who they mean."
+            ).strip()
+            with state_lock():
+                save(PLAYER_FILE, player)
 
     area_arrival = None
     delayed = pop_delayed_directive(player)
@@ -597,7 +773,9 @@ def process_player_action(action, *, on_prose_chunk=None):
             with state_lock():
                 save(PLAYER_FILE, player)
 
-    if kind in ("search", "general", "examine"):
+    if kind in ("search", "examine") or (
+        kind == "general" and not extract_find_name_query(action)
+    ):
         check = action_ctx.get("skill_check")
         success = True if kind == "search" else (check["success"] if check else True)
         item_note, item = try_acquire_item(
@@ -702,7 +880,7 @@ def process_player_action(action, *, on_prose_chunk=None):
                     action_ctx.get("story_directive", "") + " " + economy_directive
                 ).strip()
 
-    if kind == "attack":
+    if kind == "attack" and not action_ctx.get("target_ambiguous"):
         with state_lock():
             out = _do_combat(player, npcs, monsters, present, tick, action, action_ctx)
             directive, combat_target, err, combat_snap, _result = out
@@ -810,45 +988,38 @@ def process_player_action(action, *, on_prose_chunk=None):
         if ensure_npc_continuity_locks(player, focus_npcs):
             save(PLAYER_FILE, player)
 
-    scene = get_narrator().generate_scene(
-        player_action=action,
-        world=world,
-        player=player,
-        present_npcs=focus_npcs,
-        memories=get_relevant_memories(
-            events, action, limit=15,
-            player=player, area=player.get("area"),
-            focal_npc_id=focal_id,
-        ),
-        rumors=rumors[-5:] if rumors else [],
-        new_npcs=intro_for_scene,
-        known_ids=known_ids,
-        relationships=rels_toward_player,
-        extra_directive=extra_directive,
-        local_arc=area_arc,
-        tick=tick,
-        action_context=action_ctx,
-        name_reveal=name_reveal,
-        locals_know_player_name=locals_know_name(player, focus_id_list),
-        crowd_note=crowd_note,
-        scene_event=scene_event,
-        immersion_block=immersion_block,
-        focal_npc_id=focal_id,
-        scene_place=scene_place,
-        hard_constraints=hard_constraints,
-        on_prose_chunk=on_prose_chunk,
-    )
+    action_ctx["presence_facts"] = build_scene_presence_facts(present, action_ctx)
 
-    prose_issues = log_scene_prose_issues(
-        scene,
-        player=player,
-        npcs=npcs,
-        action_ctx=action_ctx,
-        focal_npc_id=focal_id,
-        scene_place=scene_place,
-        present_npcs=focus_npcs,
-        known_ids=known_ids,
-    )
+    if action_ctx.get("target_ambiguous"):
+        pending = player.get("pending_target_clarification") or {}
+        scene = build_clarification_scene(pending)
+        prose_issues = []
+    else:
+        scene, prose_issues = _generate_scene_with_validation(
+            action=action,
+            world=world,
+            player=player,
+            focus_npcs=focus_npcs,
+            events=events,
+            rumors=rumors,
+            intro_for_scene=intro_for_scene,
+            known_ids=known_ids,
+            rels_toward_player=rels_toward_player,
+            extra_directive=extra_directive,
+            area_arc=area_arc,
+            tick=tick,
+            action_ctx=action_ctx,
+            name_reveal=name_reveal,
+            focus_id_list=focus_id_list,
+            crowd_note=crowd_note,
+            scene_event=scene_event,
+            immersion_block=immersion_block,
+            focal_id=focal_id,
+            scene_place=scene_place,
+            hard_constraints=hard_constraints,
+            on_prose_chunk=on_prose_chunk,
+            npcs=npcs,
+        )
 
     if name_reveal:
         with state_lock():
@@ -872,10 +1043,23 @@ def process_player_action(action, *, on_prose_chunk=None):
                 save(PLAYER_FILE, player)
         if kind == "investigate":
             focus_npc = None
+        elif kind == "attack":
+            focus_npc = (
+                action_ctx.get("target_id")
+                or player.get("last_combat_target")
+                or focal_id
+                or player.get("scene_focus")
+            )
         else:
             focus_npc = action_ctx.get("target_id")
             if not focus_npc and not action_ctx.get("find_failed"):
                 focus_npc = player.get("scene_focus")
+        if (
+            kind in ("explore", "talk", "find", "ask_about", "help", "give", "show_respect")
+            and action_ctx.get("target_id")
+            and not action_ctx.get("target_ambiguous")
+        ):
+            player["scene_focus"] = action_ctx["target_id"]
         journal_areas = load(AREAS_FILE, {})
         journal_area = journal_areas.get(player.get("area"), {})
         journal_place = place_label(player, journal_area)
@@ -890,6 +1074,7 @@ def process_player_action(action, *, on_prose_chunk=None):
             "focus_npc": focus_npc,
             "approach_failed": bool(action_ctx.get("approach_failed")),
             "travel_failed": bool(action_ctx.get("travel_failed")),
+            "target_ambiguous": bool(action_ctx.get("target_ambiguous")),
             "combat_fatal": action_ctx.get("combat_fatal") if kind == "attack" else player.get("last_combat_fatal"),
         })
         maybe_compact_journal(player, npcs)

@@ -105,6 +105,34 @@ def pick_start_area(areas, city, background, rng=None):
     return rng.choices(list(ids), weights=list(weights), k=1)[0]
 
 
+def ensure_start_area(areas, city, background, rng=None):
+    """
+    Pick a start district, with fallbacks so new characters are never left unplaced.
+    """
+    rng = rng or random
+    start_area = pick_start_area(areas, city, background, rng=rng)
+    if start_area:
+        return start_area
+
+    city_districts = [
+        aid for aid, area in areas.items()
+        if area.get("city") == city and area.get("type") == "district"
+    ]
+    if city_districts:
+        return rng.choice(city_districts)
+
+    any_district = [
+        aid for aid, area in areas.items()
+        if area.get("type") == "district"
+    ]
+    if any_district:
+        return rng.choice(any_district)
+
+    raise RuntimeError(
+        f"No start district available for city {city!r}. World areas may be incomplete."
+    )
+
+
 def should_seed_opening_case(player):
     bg = (player.get("background") or "").lower()
     if bg in MYSTERY_BACKGROUNDS:

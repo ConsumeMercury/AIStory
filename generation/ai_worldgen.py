@@ -3,19 +3,24 @@ Build-time narrative enrichment — optional LLM pass over procedural world data
 """
 
 import logging
-import uuid
+import random
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from generation.llm_content import (
     ai_worldgen_enabled,
+    ai_worldgen_history_enabled,
+    ai_worldgen_institutions_enabled,
+    institution_enrich_limit,
     llm_json,
     npc_batch_size,
-    validate_background_spec,
+    npc_enrich_limit,
+    npc_batch_max_tokens,
+    worldgen_parallel_workers,
+    worldgen_retry_failed,
+    worldgen_split_batches,
+    unwrap_npc_batch_payload,
     validate_history_events,
-    validate_name_spec,
     validate_npc_profile,
-    validate_objective_spec,
-    validate_persona_spec,
-    validate_secrets_list,
     validate_storyline_spec,
     call_llm_json,
 )
@@ -30,7 +35,7 @@ _SYSTEM = (
 
 
 def maybe_enrich_world_history(events, cities):
-    if not ai_worldgen_enabled() or not events:
+    if not ai_worldgen_enabled() or not ai_worldgen_history_enabled() or not events:
         return events
     city_names = ", ".join(c.get("name", "Unknown") for c in (cities or [])[:4])
     template = events[0] if events else {}
@@ -64,12 +69,12 @@ Do not reference places not in: {district_name}, {city_name}."""
 
 
 def maybe_enrich_institution_arc(spec, *, inst_type="", inst_name="", city_name=""):
-    if not ai_worldgen_enabled() or not spec:
+    if not ai_worldgen_enabled() or not ai_worldgen_institutions_enabled() or not spec:
         return spec
     prompt = f"""Create an institution arc for a fantasy city RPG.
 Institution: {inst_name} ({inst_type}) in {city_name}
-Return JSON object:
-{{ "title": string, "theme": string, "hooks": [2-3 hooks], "stages": [exactly 5 beats] }}
+Return JSON object with exactly these keys:
+{{ "title": string, "theme": string, "hook": string (one opening hook), "stages": [exactly 5 short beats] }}
 The arc should fit guild/church/court politics, not epic fantasy."""
     enriched = llm_json(prompt, validate_storyline_spec, system=_SYSTEM, temperature=0.85)
     if enriched:
@@ -78,65 +83,31 @@ The arc should fit guild/church/court politics, not epic fantasy."""
     return spec
 
 
-def maybe_enrich_persona(npc, *, city_name="", area_name=""):
-    if not ai_worldgen_enabled():
-        return npc.get("persona")
-    role = npc.get("role", "citizen")
-    age = npc.get("age", 30)
-    prompt = f"""Write a speech persona for an NPC in a fantasy city.
-Role: {role}, age {age}, district {area_name}, city {city_name}
-Return JSON:
-{{ "speech_style": string, "voice_quirk": string, "core_value": string, "mood": string,
-   "example_lines": [2 short lines this NPC might say], "avoids_topics": [1-2 topics] }}"""
-    return llm_json(prompt, validate_persona_spec, system=_SYSTEM, temperature=0.88)
+def _npc_profile_enriched(npc):
+    return bool((npc.get("physique") or {}).get("appearance_lock"))
 
 
-def maybe_enrich_background(npc, *, city_name="", area_name=""):
-    if not ai_worldgen_enabled():
-        return npc.get("background")
-    role = npc.get("role", "citizen")
-    faction = (npc.get("faction") or {}).get("name", "none")
-    prompt = f"""Write a compact character background for a fantasy city NPC.
-Role: {role}, faction: {faction}, lives in {area_name}, {city_name}
-Return JSON:
-{{ "summary": string (2-3 sentences), "childhood": string, "formative_event": string,
-   "current_situation": string, "belief": string, "secret": string, "mannerism": string, "hope": string }}"""
-    return llm_json(prompt, validate_background_spec, system=_SYSTEM, temperature=0.88)
+def _apply_npc_batch_results(batch, raw):
+    raw = unwrap_npc_batch_payload(raw)
+    if not isinstance(raw, list):
+        return False
+    applied = 0
+    for npc, item in zip(batch, raw):
+        ok, cleaned, errors = validate_npc_profile(item)
+        if ok:
+            _apply_npc_profile(npc, cleaned)
+            applied += 1
+        else:
+            log.debug("AI worldgen: skipped NPC %s: %s", npc.get("id"), errors)
+    return applied > 0
 
 
-def maybe_enrich_objective(npc, npcs=None):
-    if not ai_worldgen_enabled():
-        return None
-    name = npc.get("name", "they")
-    role = npc.get("role", "citizen")
-    prompt = f"""Write one personal objective for NPC {name} ({role}) in a fantasy city.
-Return JSON: {{ "text": string (one sentence, actionable, not heroic epic) }}"""
-    result = llm_json(prompt, validate_objective_spec, system=_SYSTEM, temperature=0.9)
-    return result.get("text") if result else None
-
-
-def maybe_enrich_secrets(npc, count=1):
-    if not ai_worldgen_enabled() or count < 1:
-        return None
-    name = npc.get("name", "they")
-    role = npc.get("role", "citizen")
-    prompt = f"""Write {count} secrets for NPC {name} ({role}) in a fantasy city.
-Return JSON array of {{ "text": string, "severity": "minor"|"major"|"deadly" }}"""
-    result = llm_json(prompt, validate_secrets_list, system=_SYSTEM, temperature=0.85)
-    return result
-
-
-def maybe_enrich_name(culture, city_name="", role=""):
-    if not ai_worldgen_enabled():
-        return None
-    prompt = f"""Generate one character name for culture {culture}, city {city_name}, role {role}.
-Return JSON: {{ "given_name": string, "surname": string optional }}"""
-    result = llm_json(prompt, validate_name_spec, system=_SYSTEM, temperature=0.95)
-    if not result:
-        return None
-    if result.get("surname"):
-        return f"{result['given_name']} {result['surname']}"
-    return result["given_name"]
+def _retry_failed_npcs(batch, *, city_name, area_lookup):
+    for npc in batch:
+        if _npc_profile_enriched(npc):
+            continue
+        area = area_lookup(npc.get("area", ""), "unknown district")
+        _enrich_npc_one(npc, city_name=city_name, area_name=area)
 
 
 def _apply_npc_profile(npc, profile):
@@ -151,10 +122,48 @@ def _apply_npc_profile(npc, profile):
         npc.setdefault("physique", {})["appearance_lock"] = lock
     if profile.get("name"):
         npc["name"] = profile["name"]
+    obj_text = profile.get("personal_objective")
+    if obj_text:
+        npc["personal_objective"] = {
+            "text": obj_text,
+            "progress": 0,
+            "target": 100,
+            "complete": False,
+        }
+
+
+def _enrich_npc_one(npc, *, city_name, area_name):
+    prompt = f"""Write one character profile for a gritty fantasy city RPG.
+City: {city_name}, district: {area_name}
+NPC: role={npc.get('role')}, age={npc.get('age')}, gender={npc.get('gender')}, name={npc.get('name')}
+Return JSON object:
+{{
+  "persona": {{ "speech_style", "voice_quirk", "core_value", "mood", "example_lines": [2], "avoids_topics": [1-2] }},
+  "background": {{ "summary", "childhood", "formative_event", "current_situation", "belief", "secret", "mannerism", "hope" }},
+  "appearance_lock": "one vivid sentence: face, hair, eyes, mark",
+  "personal_objective": "one short actionable sentence"
+}}
+Keep fields concise. Do NOT change role or age."""
+    raw = call_llm_json(
+        prompt, system=_SYSTEM, temperature=0.88, max_tokens=npc_batch_max_tokens(),
+    )
+    raw = unwrap_npc_batch_payload(raw)
+    if not isinstance(raw, dict):
+        return False
+    ok, cleaned, errors = validate_npc_profile(raw)
+    if ok:
+        _apply_npc_profile(npc, cleaned)
+        return True
+    log.debug("AI worldgen: skipped NPC %s: %s", npc.get("id"), errors)
+    return False
 
 
 def _enrich_npc_batch(batch, *, city_name, area_lookup):
     if not batch:
+        return
+    if len(batch) == 1:
+        area = area_lookup(batch[0].get("area", ""), "unknown district")
+        _enrich_npc_one(batch[0], city_name=city_name, area_name=area)
         return
     lines = []
     for npc in batch:
@@ -172,21 +181,66 @@ Return JSON array (same order, one object per NPC). Each object:
 {{
   "persona": {{ "speech_style", "voice_quirk", "core_value", "mood", "example_lines": [2], "avoids_topics": [1-2] }},
   "background": {{ "summary", "childhood", "formative_event", "current_situation", "belief", "secret", "mannerism", "hope" }},
-  "appearance_lock": "one vivid sentence: face, hair, eyes, mark — for narrator consistency"
+  "appearance_lock": "one vivid sentence: face, hair, eyes, mark — for narrator consistency",
+  "personal_objective": "one short actionable sentence"
 }}
-Do NOT change roles or ages. Make each voice distinct."""
-    raw = call_llm_json(prompt, system=_SYSTEM, temperature=0.88, max_tokens=4096)
-    if not isinstance(raw, list):
+Keep each field short. Do NOT change roles or ages. Make each voice distinct."""
+    raw = call_llm_json(prompt, system=_SYSTEM, temperature=0.88, max_tokens=npc_batch_max_tokens())
+    if _apply_npc_batch_results(batch, raw):
+        if worldgen_retry_failed():
+            _retry_failed_npcs(batch, city_name=city_name, area_lookup=area_lookup)
         return
-    for npc, item in zip(batch, raw):
-        ok, cleaned, errors = validate_npc_profile(item)
-        if ok:
-            _apply_npc_profile(npc, cleaned)
-        else:
-            log.debug("AI worldgen: skipped NPC %s: %s", npc.get("id"), errors)
+    if worldgen_split_batches() and len(batch) > 1:
+        mid = len(batch) // 2
+        log.info("AI worldgen: batch failed, splitting %d NPCs", len(batch))
+        _enrich_npc_batch(batch[:mid], city_name=city_name, area_lookup=area_lookup)
+        _enrich_npc_batch(batch[mid:], city_name=city_name, area_lookup=area_lookup)
+        return
+    if len(batch) == 1:
+        area = area_lookup(batch[0].get("area", ""), "unknown district")
+        _enrich_npc_one(batch[0], city_name=city_name, area_name=area)
 
 
-def enrich_npc_population(npcs, areas, city_name=""):
+def select_npcs_for_enrichment(npcs, institutions, limit):
+    """
+    Prioritize institution leaders/members, then fill to limit with other alive NPCs.
+    limit 0 means enrich everyone alive.
+    """
+    alive = [n for n in npcs.values() if n.get("status") == "alive"]
+    if limit <= 0 or len(alive) <= limit:
+        return alive
+
+    priority_ids = []
+    seen = set()
+    for inst in (institutions or {}).values():
+        leader = inst.get("leader")
+        if leader and leader not in seen:
+            priority_ids.append(leader)
+            seen.add(leader)
+        for mid in list((inst.get("members") or {}).keys()):
+            if mid not in seen:
+                priority_ids.append(mid)
+                seen.add(mid)
+            if len(priority_ids) >= limit:
+                break
+        if len(priority_ids) >= limit:
+            break
+
+    for n in alive:
+        if n.get("key_npc") and n["id"] not in seen:
+            priority_ids.append(n["id"])
+            seen.add(n["id"])
+        if len(priority_ids) >= limit:
+            break
+
+    ordered = [npcs[nid] for nid in priority_ids if nid in npcs]
+    rest = [n for n in alive if n["id"] not in seen]
+    random.shuffle(rest)
+    ordered.extend(rest)
+    return ordered[:limit]
+
+
+def enrich_npc_population(npcs, areas, city_name="", institutions=None):
     if not ai_worldgen_enabled() or not npcs:
         return
 
@@ -196,13 +250,39 @@ def enrich_npc_population(npcs, areas, city_name=""):
             return area.get("name", default)
         return default
 
-    alive = [n for n in npcs.values() if n.get("status") == "alive"]
+    limit = npc_enrich_limit()
+    to_enrich = select_npcs_for_enrichment(npcs, institutions, limit)
     batch_sz = npc_batch_size()
-    total = len(alive)
-    for i in range(0, total, batch_sz):
-        chunk = alive[i:i + batch_sz]
-        log.info("AI worldgen: enriching NPCs %d-%d / %d", i + 1, min(i + batch_sz, total), total)
-        _enrich_npc_batch(chunk, city_name=city_name, area_lookup=lookup)
+    total = len(to_enrich)
+    if total < len([n for n in npcs.values() if n.get("status") == "alive"]):
+        log.info(
+            "AI worldgen: enriching %d / %d NPCs (cap AISTORY_AI_WORLDGEN_NPC_LIMIT=%s)",
+            total, len(npcs), limit,
+        )
+
+    batches = [to_enrich[i:i + batch_sz] for i in range(0, total, batch_sz)]
+    workers = min(worldgen_parallel_workers(), len(batches)) if batches else 1
+
+    if workers <= 1:
+        for i, chunk in enumerate(batches):
+            log.info(
+                "AI worldgen: enriching NPCs %d-%d / %d",
+                i * batch_sz + 1, min((i + 1) * batch_sz, total), total,
+            )
+            _enrich_npc_batch(chunk, city_name=city_name, area_lookup=lookup)
+        return
+
+    log.info("AI worldgen: enriching %d NPCs in %d parallel batches", total, len(batches))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(_enrich_npc_batch, chunk, city_name=city_name, area_lookup=lookup): chunk
+            for chunk in batches
+        }
+        for future in as_completed(futures):
+            try:
+                future.result()
+            except Exception as err:
+                log.warning("AI worldgen batch failed: %s", err)
 
 
 def _apply_institution_arc(inst, enriched, arc):
@@ -212,20 +292,6 @@ def _apply_institution_arc(inst, enriched, arc):
     arc["stages"] = list(enriched["stages"])
     arc["current"] = enriched["stages"][0]
     inst["arc"] = arc
-
-
-def _apply_ai_secrets(npc, secret_specs):
-    npc["secrets"] = [
-        {
-            "id": str(uuid.uuid4())[:8],
-            "text": s["text"],
-            "severity": s.get("severity", "major"),
-            "exposed": False,
-            "exposed_to_player": False,
-            "blackmail_used": False,
-        }
-        for s in secret_specs
-    ]
 
 
 def enrich_world_narrative(world, locations, areas, institutions, npcs, factions):
@@ -246,35 +312,26 @@ def enrich_world_narrative(world, locations, areas, institutions, npcs, factions
         city_list = list(cities.values()) if isinstance(cities, dict) else cities
         world["history"] = maybe_enrich_world_history(world["history"], city_list)
 
-    for inst in (institutions or {}).values():
-        arc = inst.get("arc") or {}
-        arc_spec = arc.get("spec") or {}
-        if not isinstance(arc_spec, dict) or not arc_spec.get("stages"):
-            continue
-        enriched = maybe_enrich_institution_arc(
-            arc_spec,
-            inst_type=inst.get("type", ""),
-            inst_name=inst.get("name", ""),
-            city_name=city_name,
+    if ai_worldgen_institutions_enabled():
+        inst_list = sorted(
+            (institutions or {}).values(),
+            key=lambda i: len(i.get("members") or {}),
+            reverse=True,
         )
-        if enriched is not arc_spec:
-            _apply_institution_arc(inst, enriched, arc)
+        for inst in inst_list[:institution_enrich_limit()]:
+            arc = inst.get("arc") or {}
+            arc_spec = arc.get("spec") or {}
+            if not isinstance(arc_spec, dict) or not arc_spec.get("stages"):
+                continue
+            enriched = maybe_enrich_institution_arc(
+                arc_spec,
+                inst_type=inst.get("type", ""),
+                inst_name=inst.get("name", ""),
+                city_name=city_name,
+            )
+            if enriched is not arc_spec:
+                _apply_institution_arc(inst, enriched, arc)
 
-    enrich_npc_population(npcs, areas, city_name=city_name)
-
-    for npc in (npcs or {}).values():
-        if npc.get("status") != "alive":
-            continue
-        obj_text = maybe_enrich_objective(npc)
-        if obj_text:
-            npc["personal_objective"] = {
-                "text": obj_text,
-                "progress": 0,
-                "target": 100,
-                "complete": False,
-            }
-        secret_specs = maybe_enrich_secrets(npc, count=1)
-        if secret_specs:
-            _apply_ai_secrets(npc, secret_specs)
+    enrich_npc_population(npcs, areas, city_name=city_name, institutions=institutions)
 
     log.info("AI worldgen: narrative enrichment complete")

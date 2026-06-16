@@ -104,14 +104,22 @@ def select_scene_cast(present, player, action_ctx, max_focus=1):
     if not present:
         return [], "You are alone here.", None
 
+    kind = action_ctx.get("kind", "general")
     present_ids = {n["id"] for n in present}
     tid = action_ctx.get("target_id")
     if tid and tid not in present_ids:
-        action_ctx["target_id"] = None
-        if player.get("scene_focus") == tid:
-            player["scene_focus"] = None
+        keep_dead_combat = (
+            kind == "attack"
+            and (
+                action_ctx.get("combat_snapshot")
+                or action_ctx.get("combat_fatal") is not None
+            )
+        )
+        if not keep_dead_combat:
+            action_ctx["target_id"] = None
+            if player.get("scene_focus") == tid:
+                player["scene_focus"] = None
 
-    kind = action_ctx.get("kind", "general")
     known = player.get("known_npcs", {})
     institutions = load(INST_FILE, {})
 

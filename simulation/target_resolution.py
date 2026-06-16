@@ -88,7 +88,7 @@ def find_npc_by_name_in_text(text, npcs, player):
         for n in hits:
             if n["id"] == focus:
                 return n
-        return hits[0]
+        return None
     return None
 
 
@@ -177,8 +177,8 @@ def resolve_action_target(action, player, present, npcs=None, kind="general"):
         for n in females:
             if n["id"] == focus_id:
                 return n
-        if females:
-            return females[0]
+        if len(females) > 1:
+            return None
 
     if re.search(r"\b(man|boy|he|him)\b", text) and not re.search(r"\b(woman|girl|lady|she|her)\b", text):
         males = [n for n in present if n.get("gender") == "male"]
@@ -188,8 +188,8 @@ def resolve_action_target(action, player, present, npcs=None, kind="general"):
         for n in males:
             if n["id"] == focus_id:
                 return n
-        if males:
-            return males[0]
+        if len(males) > 1:
+            return None
 
     for n in present:
         build = n.get("physique", {}).get("build", "")

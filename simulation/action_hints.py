@@ -66,6 +66,13 @@ def _dedupe(items, limit=3):
 def collect_action_suggestions(player=None, last_kind=None, limit=4, force=False):
     """Plain suggestion strings for the web UI chip bar."""
     player = player or load(PLAYER_FILE, {})
+    pending = player.get("pending_target_clarification")
+    if pending:
+        return _dedupe(
+            [opt.get("chip") for opt in (pending.get("options") or []) if opt.get("chip")],
+            limit=limit,
+        )
+
     if not force and get_hint_mode(player) == "off":
         return []
 

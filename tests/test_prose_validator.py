@@ -59,6 +59,14 @@ def test_analyze_prose_includes_place_and_speaker_checks():
     assert any("harbor" in i or "LOCATION LOCK" in i or "moves toward" in i for i in issues)
 
 
+def test_build_prose_correction_block():
+    from simulation.prose_validator import build_prose_correction_block
+
+    block = build_prose_correction_block(["Wrong role: guard", "Place drift"])
+    assert "CORRECTIONS REQUIRED" in block
+    assert "Wrong role" in block
+
+
 def test_log_scene_prose_issues_warns_but_does_not_raise(caplog):
     npcs = {"p1": _npc("p1")}
     player = {"scene_focus": "p1", "known_npcs": {"p1": {"name_known": True}}}
@@ -116,6 +124,14 @@ def test_prose_issues_recorded_in_turn_trace(monkeypatch):
     monkeypatch.setattr(
         "simulation.story_loop.try_meta_command",
         lambda action: None,
+    )
+    monkeypatch.setattr(
+        "simulation.story_loop.detect_target_ambiguity",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "simulation.story_loop.validate_scene_prose",
+        lambda *args, **kwargs: ["LOCATION LOCK violated: harbor district"],
     )
     with patch("simulation.story_loop.get_narrator", return_value=mock_narr):
         with patch("simulation.story_loop.simulation_runner.get_current_tick", return_value=1):

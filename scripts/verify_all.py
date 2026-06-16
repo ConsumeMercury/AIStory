@@ -248,14 +248,26 @@ def test_simulation_audit():
     from simulation import simulation_runner
     simulation_runner.stop()
     try:
-        audit.audit_explore_anchor()
-        audit.audit_attack_her()
-        audit.audit_find_sword_inventory()
-        audit.audit_confession_witness()
-        audit.audit_find_person_role()
-        audit.audit_non_fatal_no_ghost_speaker()
+        for name, fn in [
+            ("explore_anchor", audit.audit_explore_anchor),
+            ("attack_her", audit.audit_attack_her),
+            ("find_sword_inventory", audit.audit_find_sword_inventory),
+            ("confession_witness", audit.audit_confession_witness),
+            ("find_person_role", audit.audit_find_person_role),
+            ("non_fatal_focal", audit.audit_non_fatal_no_ghost_speaker),
+            ("talk_priest_overrides_focus", audit.audit_talk_priest_overrides_focus),
+            ("withdraw_clears_focus", audit.audit_withdraw_clears_focus),
+            ("focal_id_integrity", audit.audit_focal_id_integrity),
+            ("travel_failed_empty_cast", audit.audit_travel_failed_empty_cast),
+        ]:
+            fn()
     finally:
         simulation_runner.start()
+
+
+def test_smoke_test():
+    import scripts.smoke_test as smoke
+    smoke.main()
 
 
 def main():
@@ -283,6 +295,7 @@ def main():
         ("story_loop_offline", test_story_loop_offline),
         ("generation_report_offline", test_generation_report_offline),
         ("simulation_audit", test_simulation_audit),
+        ("smoke_test", test_smoke_test),
     ]
     failed = []
     for name, fn in tests:

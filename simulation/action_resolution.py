@@ -29,9 +29,25 @@ _ITEM_KEYWORDS = (
 _FIND_PERSON = re.compile(
     r"\bfind(?:\s+(?:the|a|an))?\s+(.+)$", re.I,
 )
+_FIND_PERSON_QUERY = re.compile(
+    r"\b(?:find|look for|search for|locate)\s+(?:the\s+)?"
+    r"(?!a\s+(?:sword|blade|dagger|knife|weapon|axe|bow|armor|armour|steel)\b)"
+    r"(?:[A-Za-z][a-z'-]+(?:\s+[A-Za-z][a-z'-]+)?|"
+    r"someone|(?:a\s+)?person)\b",
+    re.I,
+)
+_PERSON_QUERY_STOP = frozenset({
+    "work", "someone", "person", "clues", "proof", "answers", "help", "way", "out",
+    "a", "an", "the",
+    "sword", "blade", "dagger", "knife", "weapon", "axe", "bow", "armor", "armour", "steel",
+})
+_COMBAT_ROLE = re.compile(
+    r"\b(knight|knights|guard|guards|soldier|soldiers|levy|watchman|pikeman|captain)\b", re.I,
+)
 _DESC_HINTS = (
     (re.compile(r"\bred[\s-]?hair(?:ed)?|\bauburn\b", re.I), lambda n: _hair_match(n, ("red", "auburn", "copper"))),
     (re.compile(r"\b(grey|gray)[\s-]?hair|\bsilver[\s-]?hair\b", re.I), lambda n: _hair_match(n, ("grey", "gray", "silver", "white"))),
+    (re.compile(r"\b(knight|knights|guard|guards|soldier|soldiers|levy|watchman|pikeman)\b", re.I), lambda n: n.get("role") in ("guard", "soldier")),
     (re.compile(r"\b(captain|sailor|dockmaster|harbour master|harbor master)\b", re.I), lambda n: n.get("role") in ("sailor", "merchant", "guard")),
     (re.compile(r"\b(priest|cleric|monk|clerk|clerics)\b", re.I), lambda n: n.get("role") == "priest"),
     (re.compile(r"\b(merchant|trader)\b", re.I), lambda n: n.get("role") in ("merchant", "innkeeper")),
@@ -49,19 +65,23 @@ def match_npc_by_description(action, present):
     """Match present NPCs by role/appearance hints in player text."""
     if not action or not present:
         return None
-    hits = []
+    scores = {}
     for pattern, matcher in _DESC_HINTS:
-        if pattern.search(action):
-            for n in present:
-                try:
-                    if matcher(n):
-                        hits.append(n)
-                except Exception:
-                    continue
-    if len(hits) == 1:
-        return hits[0]
-    if len(hits) > 1:
-        return hits[0]
+        if not pattern.search(action):
+            continue
+        for n in present:
+            try:
+                if matcher(n):
+                    scores[n["id"]] = scores.get(n["id"], 0) + 1
+            except Exception:
+                continue
+    if scores:
+        best = max(scores.values())
+        top_ids = [nid for nid, score in scores.items() if score == best]
+        if len(top_ids) == 1:
+            top_id = top_ids[0]
+            return next(n for n in present if n["id"] == top_id)
+        return None
     m = _FIND_PERSON.match(action.strip())
     if m:
         query = m.group(1).lower()
@@ -92,8 +112,7 @@ def resolve_pronoun_target(action, player, present):
                     return n
         if len(cands) == 1:
             return cands[0]
-        if cands:
-            return cands[0]
+        return None
 
     if male_hint:
         cands = [n for n in present if n.get("gender") == "male"]
@@ -107,8 +126,7 @@ def resolve_pronoun_target(action, player, present):
                     return n
         if len(cands) == 1:
             return cands[0]
-        if cands:
-            return cands[0]
+        return None
 
     if last:
         for n in present:
@@ -160,8 +178,14 @@ def resolve_combat_target(action, player, present, npcs, monsters, area, city):
     if re.search(r"\b(monster|beast|wolf|creature|ghoul|stalker)\b", text) and mon_here:
         return mon_here[0], "monster"
 
-    if present:
+    if _COMBAT_ROLE.search(text):
+        return None, None
+
+    if len(present) == 1:
         return present[0], "npc"
+
+    if present:
+        return None, None
 
     if mon_here:
         return mon_here[0], "monster"
@@ -192,6 +216,8 @@ def try_acquire_item(action, player, area, tick, skill_success=True):
     if not _ACQUIRE_VERBS.search(action or ""):
         return None, None
     if re.search(r"\b(find someone|find work|find a person)\b", action, re.I):
+        return None, None
+    if _FIND_PERSON_QUERY.search(action or ""):
         return None, None
 
     matched = None
@@ -260,10 +286,10 @@ def resolve_find_person(action, player, present, npcs):
                 if len(hits) == 1:
                     return hits[0]
                 if len(hits) > 1:
-                    return hits[0]
+                    return None
                 return None
 
-    named = find_npc_by_name_in_text(action, npcs, player)
+    named = resolve_npc_by_name_query(action, npcs, player) or find_npc_by_name_in_text(action, npcs, player)
     if named:
         for n in present:
             if n["id"] == named["id"]:
@@ -277,6 +303,97 @@ def resolve_find_person(action, player, present, npcs):
             if n["id"] == focus:
                 return n
     return match_npc_by_description(action, present)
+
+
+def extract_find_name_query(action):
+    """First/last name from 'find Edvar' / 'locate Edvar Dremar'."""
+    m = re.search(
+        r"\b(?:find|look for|locate)\s+(?:the\s+)?([A-Za-z][a-z'-]+(?:\s+[A-Za-z][a-z'-]+)?)\b",
+        action or "",
+        re.I,
+    )
+    if not m:
+        return None
+    query = m.group(1).lower().strip()
+    query = re.sub(r"^(?:a|an|the)\s+", "", query)
+    first = query.split()[0] if query else ""
+    if first in _PERSON_QUERY_STOP or query in _PERSON_QUERY_STOP:
+        return None
+    return query
+
+
+def _name_matches_query(npc, query):
+    name = (npc.get("name") or "").lower()
+    if not name or not query:
+        return False
+    if query in name:
+        return True
+    parts = name.split()
+    if parts[0] == query:
+        return True
+    if len(query.split()) > 1 and all(tok in parts for tok in query.split()):
+        return True
+    return False
+
+
+def resolve_npc_by_name_query(action, npcs, player):
+    """Match NPC by name fragment — case suspects first, then known/all during investigations."""
+    query = extract_find_name_query(action)
+    if not query:
+        return None
+
+    case = player.get("active_case") or {}
+    priority_ids = []
+    if case and not case.get("solved"):
+        priority_ids.extend(case.get("suspect_ids") or [])
+        priority_ids.extend(case.get("witness_ids") or [])
+        if case.get("victim_id"):
+            priority_ids.append(case["victim_id"])
+
+    seen = set()
+    for nid in priority_ids:
+        if nid in seen:
+            continue
+        seen.add(nid)
+        npc = npcs.get(nid)
+        if npc and _name_matches_query(npc, query):
+            return npc
+
+    known = player.get("known_npcs", {})
+    for npc in npcs.values():
+        if npc.get("status") != "alive":
+            continue
+        if known.get(npc["id"], {}).get("name_known") and _name_matches_query(npc, query):
+            return npc
+
+    if case and not case.get("solved"):
+        for npc in npcs.values():
+            if npc.get("status") == "alive" and _name_matches_query(npc, query):
+                return npc
+
+    return None
+
+
+def build_find_failed_facts(target_npc=None, *, query=None):
+    if target_npc:
+        name = target_npc.get("name") or "them"
+        return (
+            "SCENE FACTS — FIND PERSON (obey exactly):\n"
+            f"- {name} is NOT in this scene — the protagonist searched but they are elsewhere.\n"
+            "- Do NOT invent meeting them here. Do NOT give the protagonist a weapon or loot instead.\n"
+            "- Others present may mention where they usually are, if already established in the ledger.\n"
+        )
+    if query:
+        return (
+            "SCENE FACTS — FIND PERSON (obey exactly):\n"
+            f"- No one matching '{query}' is here — search fails.\n"
+            "- Do NOT invent finding a blade, sword, or loot unless inventory facts say so.\n"
+        )
+    return (
+        "SCENE FACTS — FIND PERSON (obey exactly):\n"
+        "- Search failed — no matching person in scene.\n"
+        "- Do NOT substitute a weapon pickup for finding someone.\n"
+    )
 
 
 def build_find_facts(target):
@@ -371,6 +488,52 @@ def build_combat_facts(target, result, target_kind, npcs):
             "They may speak briefly if focal — same person, same voice."
         )
     lines.append("- ONLY this opponent was in the fight. Do not invent a different combatant.")
+    rounds = result.get("log") or []
+    if rounds:
+        lines.append("- Round log (fixed order):")
+        for entry in rounds[:8]:
+            if isinstance(entry, str):
+                lines.append(f"  · {entry[:120]}")
+            elif isinstance(entry, dict):
+                lines.append(f"  · {entry.get('summary', entry)}"[:140])
+    return "\n".join(lines)
+
+
+_AMBIENT_ROLE_CHECKS = (
+    ("guard", ("guard", "soldier"), "guard or soldier"),
+    ("priest", ("priest",), "priest or cleric"),
+    ("merchant", ("merchant", "innkeeper"), "merchant or trader"),
+    ("sailor", ("sailor",), "sailor or dockhand"),
+)
+
+
+def build_scene_presence_facts(present, action_ctx=None):
+    """Who is actually in scene — and common roles that are NOT present."""
+    lines = ["SCENE FACTS — WHO IS HERE (obey exactly):"]
+    if present:
+        for npc in present[:10]:
+            desc = short_descriptor(npc)
+            role = npc.get("role", "stranger")
+            lines.append(f"- PRESENT: {desc}, role={role}.")
+    else:
+        lines.append("- PRESENT: no named NPCs in this scene.")
+
+    roles_here = {(n.get("role") or "").lower() for n in (present or [])}
+    for _key, role_set, label in _AMBIENT_ROLE_CHECKS:
+        if not roles_here.intersection(role_set):
+            lines.append(
+                f"- NOT PRESENT: no {label} NPC in this scene — "
+                "do not give them dialogue, combat, or named interaction."
+            )
+
+    ctx = action_ctx or {}
+    if ctx.get("target_ambiguous"):
+        lines.append(
+            "- NO ACTION RESOLVED: protagonist has not chosen a target yet — "
+            "no violence or directed dialogue toward a specific person."
+        )
+    if ctx.get("approach_failed") or ctx.get("travel_failed"):
+        lines.append("- NO MOVEMENT this beat.")
     return "\n".join(lines)
 
 

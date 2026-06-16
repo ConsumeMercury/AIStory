@@ -194,6 +194,19 @@ def _looks_truncated(text, response):
     return False
 
 
+def _looks_truncated_json(text, response):
+    """JSON build-time output — do not apply prose ending heuristics."""
+    reason = _finish_reason(response)
+    if reason is not None and "MAX_TOKENS" in str(reason).upper():
+        return True
+    stripped = (text or "").strip()
+    if len(stripped) < 10:
+        return True
+    if stripped[-1] in "}]":
+        return False
+    return True
+
+
 def _call_with_retries(client, model, prompt, *, cap, temperature, top_p, frequency_penalty=None):
     """Retry transient Gemini overload / rate-limit errors with backoff."""
     last_err = None
@@ -328,8 +341,16 @@ def _call_with_retries_stream(client, model, prompt, *, cap, temperature, top_p,
     raise last_err
 
 
-def generate_text(prompt, *, temperature=0.78, top_p=0.88, max_tokens=None, frequency_penalty=None):
-    """Send a single prompt; return complete generated prose."""
+def generate_text(
+    prompt,
+    *,
+    temperature=0.78,
+    top_p=0.88,
+    max_tokens=None,
+    frequency_penalty=None,
+    json_output=False,
+):
+    """Send a single prompt; return complete generated prose or JSON text."""
     from google.genai import errors as genai_errors
 
     client = genai.Client(api_key=require_api_key())
@@ -339,7 +360,13 @@ def generate_text(prompt, *, temperature=0.78, top_p=0.88, max_tokens=None, freq
         if m not in models_to_try:
             models_to_try.append(m)
 
-    caps = (token_cap, min(token_cap * 2, 8192))
+    caps = (token_cap, min(token_cap * 2, 16384 if json_output else 8192))
+    truncated = _looks_truncated_json if json_output else _looks_truncated
+    err_hint = (
+        "Try raising GEMINI_MAX_OUTPUT_TOKENS (e.g. 8192)."
+        if json_output
+        else "Try raising GEMINI_MAX_OUTPUT_TOKENS (e.g. 8192)."
+    )
     last_err = None
 
     for model in models_to_try:
@@ -353,12 +380,12 @@ def generate_text(prompt, *, temperature=0.78, top_p=0.88, max_tokens=None, freq
                 if not text:
                     raise RuntimeError("Gemini returned an empty response.")
 
-                if _looks_truncated(text, response):
+                if truncated(text, response):
                     if cap < caps[-1]:
                         continue
                     raise RuntimeError(
                         "Gemini response was cut off mid-sentence. "
-                        "Try raising GEMINI_MAX_OUTPUT_TOKENS (e.g. 8192)."
+                        f"{err_hint}"
                     )
                 return text
         except genai_errors.ClientError as e:

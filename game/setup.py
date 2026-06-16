@@ -4,6 +4,7 @@ World bootstrap and player character creation — shared by CLI and web UI.
 
 import os
 import random
+import threading
 
 from storage import load, save
 from generation.world_generator import generate_world, save_world
@@ -26,7 +27,7 @@ from simulation.institution_politics import attach_politics
 from simulation.npc_drama import seed_drama
 from simulation.player_goals import build_player_goals, attach_goal_profile
 from simulation.progression_engine import level_for_xp
-from game.starting_placement import pick_start_city, pick_start_area, seed_starting_pipeline
+from game.starting_placement import pick_start_city, pick_start_area, seed_starting_pipeline, ensure_start_area
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -146,83 +147,87 @@ def _ensure_dirs():
         os.makedirs(_path(sub), exist_ok=True)
 
 
+_world_gen_lock = threading.Lock()
+
+
 def ensure_world_data():
     """Generate world JSON if missing. Does not create the player."""
     _ensure_dirs()
-    if world_data_ready():
-        return
+    with _world_gen_lock:
+        if world_data_ready():
+            return
 
-    if os.path.exists(_path("world", "world_state.json")):
-        _clear_world_state()
+        if os.path.exists(_path("world", "world_state.json")):
+            _clear_world_state()
 
-    world = generate_world()
-    save_world(world)
+        world = generate_world()
+        save_world(world)
 
-    locations = generate_locations()
-    save_locations(locations)
+        locations = generate_locations()
+        save_locations(locations)
 
-    factions = generate_factions()
-    save_factions(factions)
+        factions = generate_factions()
+        save_factions(factions)
 
-    world = load("world/world_state.json", {})
-    world["history"] = generate_world_history(locations.get("cities", {}))
-    world["drama_seeded"] = True
-    save("world/world_state.json", world)
+        world = load("world/world_state.json", {})
+        world["history"] = generate_world_history(locations.get("cities", {}))
+        world["drama_seeded"] = True
+        save("world/world_state.json", world)
 
-    location_keys = list(locations["cities"].keys())
-    npcs = generate_population(count=50, locations=location_keys)
-    npcs, relationships_seed = build_families(npcs, {})
+        location_keys = list(locations["cities"].keys())
+        npcs = generate_population(count=50, locations=location_keys)
+        npcs, relationships_seed = build_families(npcs, {})
 
-    institution_plan = plan_city_institutions(locations["cities"])
-    areas = build_areas(locations["cities"], institution_plan=institution_plan)
-    annotate_city_gates(locations["cities"], areas)
-    save_locations(locations)
+        institution_plan = plan_city_institutions(locations["cities"])
+        areas = build_areas(locations["cities"], institution_plan=institution_plan)
+        annotate_city_gates(locations["cities"], areas)
+        save_locations(locations)
 
-    assign_npcs_to_districts(npcs, areas)
-    cap_area_density(npcs, areas)
+        assign_npcs_to_districts(npcs, areas)
+        cap_area_density(npcs, areas)
 
-    institutions = build_institutions(
-        npcs, areas, locations["cities"], institution_plan=institution_plan,
-    )
-    attach_schedules(npcs, areas)
-    attach_secrets(npcs, factions, institutions)
-    attach_personal_objectives(npcs)
+        institutions = build_institutions(
+            npcs, areas, locations["cities"], institution_plan=institution_plan,
+        )
+        attach_schedules(npcs, areas)
+        attach_secrets(npcs, factions, institutions)
+        attach_personal_objectives(npcs)
 
-    from generation.ai_worldgen import enrich_world_narrative
-    enrich_world_narrative(world, locations, areas, institutions, npcs, factions)
-    save("world/world_state.json", world)
+        from generation.ai_worldgen import enrich_world_narrative
+        enrich_world_narrative(world, locations, areas, institutions, npcs, factions)
+        save("world/world_state.json", world)
 
-    attach_area_storylines(areas, institutions, npcs)
-    institutions = attach_politics(institutions, npcs)
-    seed_drama(npcs)
+        attach_area_storylines(areas, institutions, npcs)
+        institutions = attach_politics(institutions, npcs)
+        seed_drama(npcs)
 
-    monsters = {}
-    for aid, area in areas.items():
-        if area.get("type") == "wilderness":
-            for mon in spawn_for_area(area.get("area_type", "wilderness"), count=random.randint(1, 3)):
-                mon["location"] = aid
-                mon["area"] = aid
-                monsters[mon["id"]] = mon
+        monsters = {}
+        for aid, area in areas.items():
+            if area.get("type") == "wilderness":
+                for mon in spawn_for_area(area.get("area_type", "wilderness"), count=random.randint(1, 3)):
+                    mon["location"] = aid
+                    mon["area"] = aid
+                    monsters[mon["id"]] = mon
 
-    save("characters/npcs.json", npcs)
-    save("world/areas.json", areas)
-    save("world/institutions.json", institutions)
+        save("characters/npcs.json", npcs)
+        save("world/areas.json", areas)
+        save("world/institutions.json", institutions)
 
-    from simulation.faction_reputation import institution_faction
-    for inst in institutions.values():
-        if not inst.get("faction_id"):
-            inst["faction_id"] = institution_faction(inst, factions)
-    save("world/institutions.json", institutions)
+        from simulation.faction_reputation import institution_faction
+        for inst in institutions.values():
+            if not inst.get("faction_id"):
+                inst["faction_id"] = institution_faction(inst, factions)
+        save("world/institutions.json", institutions)
 
-    from simulation.hunting_engine import refresh_bounty_board
-    refresh_bounty_board()
-    save("characters/monsters.json", monsters)
-    save("characters/relationships.json", relationships_seed)
-    save("characters/npc_memories.json", {})
-    save("characters/_mem_state.json", {"processed": []})
-    save("characters/memories.json", {})
-    save("events/event_log.json", [])
-    save("rumors/rumors.json", [])
+        from simulation.hunting_engine import refresh_bounty_board
+        refresh_bounty_board()
+        save("characters/monsters.json", monsters)
+        save("characters/relationships.json", relationships_seed)
+        save("characters/npc_memories.json", {})
+        save("characters/_mem_state.json", {"processed": []})
+        save("characters/memories.json", {})
+        save("events/event_log.json", [])
+        save("rumors/rumors.json", [])
 
 
 def get_starting_info():
@@ -252,7 +257,14 @@ def build_player(name, age, background_key, appearance, motivation, attire=None)
     background = BACKGROUNDS[background_key]
     locations = load("world/locations.json", {})
     cities = locations.get("cities", {})
-    starting_location = pick_start_city(cities) or "unknown"
+    if not cities:
+        raise RuntimeError(
+            "Cannot create a character: world has no cities. "
+            "Wait for world generation to finish, then try again."
+        )
+    starting_location = pick_start_city(cities)
+    if not starting_location:
+        raise RuntimeError("Cannot create a character: no starting city is available.")
 
     if attire:
         appearance = f"{appearance}; {attire}" if appearance else attire
@@ -302,15 +314,14 @@ def save_new_player(player):
     npcs = load("characters/npcs.json", {})
     tune_for_player(npcs, player, start_city=player.get("location"))
     start_city = player.get("location")
-    start_area = pick_start_area(areas, start_city, player.get("background", "wanderer"))
-    if start_area:
-        player["area"] = start_area
-        seed_starting_pipeline(player, start_area, areas, npcs)
-        sl = areas.get(start_area, {}).get("storyline") or {}
-        for nid in sl.get("key_npc_ids") or []:
-            npc = npcs.get(nid)
-            if npc and npc.get("area") != start_area:
-                npc["area"] = start_area
+    start_area = ensure_start_area(areas, start_city, player.get("background", "wanderer"))
+    player["area"] = start_area
+    seed_starting_pipeline(player, start_area, areas, npcs)
+    sl = areas.get(start_area, {}).get("storyline") or {}
+    for nid in sl.get("key_npc_ids") or []:
+        npc = npcs.get(nid)
+        if npc and npc.get("area") != start_area:
+            npc["area"] = start_area
     save("characters/npcs.json", npcs)
     save(PLAYER_FILE, player)
     return player

@@ -2,7 +2,11 @@
 
 from generation.llm_content import (
     ai_worldgen_enabled,
+    npc_batch_size,
+    npc_enrich_limit,
+    worldgen_parallel_workers,
     parse_json_response,
+    unwrap_npc_batch_payload,
     validate_background_spec,
     validate_history_events,
     validate_npc_profile,
@@ -25,6 +29,32 @@ def test_ai_worldgen_requires_api_key(monkeypatch):
     assert ai_worldgen_enabled() is False
 
 
+def test_worldgen_speed_defaults(monkeypatch):
+    monkeypatch.delenv("AISTORY_AI_WORLDGEN_NPC_BATCH", raising=False)
+    monkeypatch.delenv("AISTORY_AI_WORLDGEN_NPC_LIMIT", raising=False)
+    monkeypatch.delenv("AISTORY_AI_WORLDGEN_WORKERS", raising=False)
+    assert npc_batch_size() == 6
+    assert npc_enrich_limit() == 20
+    assert worldgen_parallel_workers() == 4
+
+
+def test_select_npcs_for_enrichment_prioritizes_leaders():
+    from generation.ai_worldgen import select_npcs_for_enrichment
+
+    npcs = {
+        f"n{i}": {"id": f"n{i}", "status": "alive", "name": f"Npc {i}"}
+        for i in range(10)
+    }
+    institutions = {
+        "guild": {"leader": "n1", "members": {"n1": "leader", "n2": "member"}},
+    }
+    picked = select_npcs_for_enrichment(npcs, institutions, limit=3)
+    ids = {n["id"] for n in picked}
+    assert "n1" in ids
+    assert "n2" in ids
+    assert len(picked) == 3
+
+
 def test_parse_json_response_strips_fences():
     raw = '```json\n{"title": "Test", "theme": "intrigue", "hooks": ["a hook here"], "stages": ["a", "b", "c", "d", "e"]}\n```'
     data = parse_json_response(raw)
@@ -42,6 +72,19 @@ def test_validate_storyline_spec_accepts_good_payload():
     assert ok is True
     assert errors == []
     assert len(cleaned["stages"]) == 5
+    assert cleaned["hook"] == payload["hooks"][0]
+
+
+def test_validate_storyline_spec_accepts_institution_hook_field():
+    payload = {
+        "title": "The Rigged Examination",
+        "theme": "academic",
+        "hook": "Whispers say the coming examinations were sold before the questions were written.",
+        "stages": ["rumours spread", "accusation at the steps", "guards look away", "ledgers clash", "reckoning"],
+    }
+    ok, cleaned, errors = validate_storyline_spec(payload)
+    assert ok is True
+    assert cleaned["hooks"] == [payload["hook"]]
 
 
 def test_validate_storyline_spec_rejects_short_stages():
@@ -65,6 +108,31 @@ def test_validate_history_events():
     ok, cleaned, _ = validate_history_events(events)
     assert ok is True
     assert len(cleaned) == 3
+
+    ok, cleaned, _ = validate_history_events({"events": events})
+    assert ok is True
+    assert len(cleaned) == 3
+
+
+def test_validate_wrapped_payloads():
+    ok, cleaned, _ = validate_secrets_list({"secrets": [{"text": "forged a partner's signature", "severity": "major"}]})
+    assert ok is True
+
+    ok, cleaned, _ = validate_objective_spec({"objective": {"text": "Find who shaved the caravan silver before the guild counts it."}})
+    assert ok is True
+
+    ok, _, _ = validate_persona_spec({"persona": {
+        "speech_style": "clipped merchant cant",
+        "voice_quirk": "counts coin while speaking",
+        "core_value": "debts must be paid",
+        "mood": "wary",
+        "example_lines": ["Price is the price.", "Don't touch the scale."],
+    }})
+    assert ok is True
+
+    batch = unwrap_npc_batch_payload({"profiles": [{"persona": {}, "background": {}}]})
+    assert isinstance(batch, list)
+    assert len(batch) == 1
 
 
 def test_validate_persona_and_background():
@@ -126,3 +194,11 @@ def test_validate_objective_and_secrets():
     ok, cleaned, _ = validate_secrets_list([{"text": "forged a partner's signature", "severity": "major"}])
     assert ok is True
     assert cleaned[0]["severity"] == "major"
+
+
+def test_json_truncation_allows_brace_endings():
+    from simulation.gemini_client import _looks_truncated_json
+
+    assert _looks_truncated_json('{"title": "Test", "hooks": ["a"]}', None) is False
+    assert _looks_truncated_json('[{"persona": {}}]', None) is False
+    assert _looks_truncated_json('{"title": "Test"', None) is True

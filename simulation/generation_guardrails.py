@@ -46,6 +46,11 @@ def build_hard_constraints_block(focal_npc_id, focal_npc, scene_place, action_co
             "Do NOT invent barred gates to a place named in prior narration. "
             "Do NOT repeat the focal NPC's last line — react to the stall or stay silent."
         )
+    if ctx.get("target_ambiguous"):
+        lines.append(
+            "- TARGET UNCLEAR — no violence or directed dialogue toward a specific person. "
+            "Protagonist must choose who they mean."
+        )
     if focal_npc_id and focal_npc:
         known_name = focal_npc.get("name")
         label = known_name or short_descriptor(focal_npc)

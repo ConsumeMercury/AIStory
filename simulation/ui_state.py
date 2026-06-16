@@ -113,15 +113,20 @@ def get_scene_labels(player, world=None):
     locs = load(LOC_FILE, {})
     area = areas.get(player.get("area"), {})
     city_key = player.get("location", "?")
-    city_name = locs.get("cities", {}).get(city_key, {}).get("name", city_key)
-    district = place_label(player, area) or area.get("name", player.get("area", "?"))
+    loc_city = locs.get("cities", {}).get(city_key, {})
+    city_name = loc_city.get("name") or (
+        city_key.replace("_", " ").title() if city_key and city_key != "unknown" else ""
+    )
+    district = place_label(player, area) or area.get("name", "")
+    if not district and player.get("area"):
+        district = str(player.get("area")).split(":")[-1].replace("_", " ").title()
     day = world.get("day", "?")
     tod = world.get("time_of_day", "")
     time_label = f"Day {day}"
     if tod:
         time_label += f" · {tod.title()}"
-    location_label = f"{city_name} — {district}" if district else city_name
-    place_short = district or city_name
+    location_label = f"{city_name} — {district}" if district and city_name else (district or city_name or "Unplaced")
+    place_short = district or city_name or "Unplaced"
     return {
         "time": time_label,
         "location": location_label,

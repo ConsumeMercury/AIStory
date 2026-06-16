@@ -1164,20 +1164,43 @@ async function submitCharacter(e) {
 async function boot() {
   const bootEl = $("#boot");
   const bootMsg = $("#boot-msg");
-  try {
-    const health = await api("/api/health");
-    if (!health.has_character) {
-      const setup = await api("/api/setup");
-      showCreateScreen(setup);
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  while (true) {
+    try {
+      const health = await api("/api/health");
+      if (health.boot_error) {
+        bootMsg.textContent = health.boot_error;
+        bootEl.classList.add("error");
+        return;
+      }
+      if (health.booting) {
+        const labels = {
+          generating_world: "Generating world…",
+          patching_world: "Finishing world setup…",
+          starting_simulation: "Starting simulation…",
+          pending: "Starting server…",
+        };
+        bootMsg.textContent = labels[health.boot_status] || "Starting…";
+        await wait(2000);
+        continue;
+      }
+
+      if (!health.has_character) {
+        const setup = await api("/api/setup");
+        showCreateScreen(setup);
+        return;
+      }
+
+      bootEl.classList.add("hidden");
+      const data = await api("/api/state");
+      await startGame({ state: data });
+      return;
+    } catch (err) {
+      bootMsg.textContent = err.message || "Could not connect. Run: python api/server.py";
+      bootEl.classList.add("error");
       return;
     }
-
-    bootEl.classList.add("hidden");
-    const data = await api("/api/state");
-    await startGame({ state: data });
-  } catch (err) {
-    bootMsg.textContent = err.message || "Could not connect. Run: python api/server.py";
-    bootEl.classList.add("error");
   }
 }
 

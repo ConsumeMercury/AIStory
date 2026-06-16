@@ -385,6 +385,42 @@ def validate_scene_prose(text, *, player, npcs, action_ctx, focal_npc_id,
     return issues
 
 
+def build_prose_correction_block(issues):
+    """Directive appended for a single regeneration attempt."""
+    if not issues:
+        return ""
+    lines = [
+        "CORRECTIONS REQUIRED (prior draft violated simulation facts — rewrite completely):",
+    ]
+    for issue in issues[:8]:
+        lines.append(f"- {issue}")
+    lines.append(
+        "- Obey SCENE FACTS, HARD CONSTRAINTS, and WHO IS HERE. "
+        "Do not invent guards, priests, or new speakers not listed as PRESENT."
+    )
+    return "\n".join(lines)
+
+
+def queue_prose_correction(player, issues):
+    """Schedule a one-beat reminder if validation still fails after retry."""
+    if not issues or not player:
+        return
+    directive = build_prose_correction_block(issues)
+    player.setdefault("delayed_directives", []).append({
+        "summary": "prose correction",
+        "directive": directive[:900],
+    })
+    player["delayed_directives"] = (player.get("delayed_directives") or [])[-10:]
+
+
+def prose_retry_limit():
+    raw = os.environ.get("AISTORY_PROSE_RETRIES", "1")
+    try:
+        return max(0, min(2, int(raw)))
+    except ValueError:
+        return 1
+
+
 def log_scene_prose_issues(text, *, player, npcs, action_ctx, focal_npc_id,
                            scene_place, present_npcs, known_ids=None):
     """Log prose anomalies; returns issue list. Never raises."""

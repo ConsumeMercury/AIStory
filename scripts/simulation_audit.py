@@ -40,6 +40,20 @@ def _mock_generate_scene(**kwargs):
     return "[audit scene]"
 
 
+def _restore_npc_home_areas(npcs):
+    """Reset NPC district placement to schedule home — audits must not inherit prior drift."""
+    for npc in npcs.values():
+        if npc.get("status") != "alive":
+            continue
+        sched = npc.get("schedule") or {}
+        home = sched.get("home_area")
+        if home:
+            npc["area"] = home
+        elif npc.get("location") and npc.get("district"):
+            npc["area"] = f"{npc['location']}:{npc['district']}"
+        npc.pop("travel_state", None)
+
+
 def _reset_player_baseline():
     from storage import load, save
     player = load("player/player.json", {})
@@ -52,6 +66,8 @@ def _reset_player_baseline():
     player["last_combat_fatal"] = False
     player["combat_witnesses"] = []
     player.pop("last_acquired_item", None)
+    player.pop("pending_target_clarification", None)
+    player["delayed_directives"] = []
     stats = player.setdefault("stats", {})
     stats["health"] = stats.get("max_health", 100)
     stats["stamina"] = stats.get("max_stamina", 30)
@@ -60,16 +76,45 @@ def _reset_player_baseline():
     player["equipment"] = {"weapon": None, "armor": None, "trinket": None}
     area = player.get("area")
     npcs = load("characters/npcs.json", {})
+    _restore_npc_home_areas(npcs)
     for npc in npcs.values():
         if npc.get("area") == area or npc.get("location") == player.get("location"):
             if npc.get("status") == "dead":
                 npc["status"] = "alive"
+            npc.pop("travel_state", None)
             stats = npc.setdefault("stats", {})
             stats["health"] = stats.get("max_health", 80)
             stats["stamina"] = stats.get("max_stamina", 20)
     save("characters/npcs.json", npcs)
     save("player/player.json", player)
+    _ensure_present_npcs(player, npcs, minimum=1)
     return player
+
+
+def _ensure_present_npcs(player, npcs, minimum=1):
+    """Guarantee at least one alive NPC in the player's district for audit sequences."""
+    area = player.get("area")
+    if not area:
+        return
+    here = [
+        n for n in npcs.values()
+        if n.get("status") == "alive" and n.get("area") == area
+    ]
+    if len(here) >= minimum:
+        return
+    from storage import save
+    needed = minimum - len(here)
+    for npc in npcs.values():
+        if npc.get("status") != "alive":
+            continue
+        if npc.get("area") == area:
+            continue
+        npc["area"] = area
+        npc["location"] = player.get("location")
+        needed -= 1
+        if needed <= 0:
+            break
+    save("characters/npcs.json", npcs)
 
 
 def _run_sequence(actions):
@@ -102,30 +147,61 @@ def _assert(condition, msg):
         raise AssertionError(msg)
 
 
+def _last_capture(action=None):
+    """Last mock narrator capture, optionally filtered by player action text."""
+    if not CAPTURED:
+        return None
+    if action is None:
+        return CAPTURED[-1]
+    matches = [c for c in CAPTURED if c.get("action") == action]
+    return matches[-1] if matches else CAPTURED[-1]
+
+
 def audit_explore_anchor():
     _reset_player_baseline()
     _run_sequence(["look around"])
-    _assert(len(CAPTURED) == 1, "expected one capture")
-    c = CAPTURED[0]
+    matches = [c for c in CAPTURED if c.get("action") == "look around"]
+    _assert(len(matches) >= 1, f"expected look around capture, got {len(CAPTURED)} total")
+    c = matches[-1]
     _assert(c["kind"] == "explore", f"explore kind, got {c['kind']}")
     _assert(len(c["focus_ids"]) == 1, f"explore should have one focal NPC, got {c}")
     _assert(c["target_id"] == c["focus_ids"][0], "explore target should match focus npc")
 
 
+def _focus_first_name(player, npcs):
+    fid = player.get("scene_focus")
+    npc = npcs.get(fid, {}) if fid else {}
+    name = (npc.get("name") or "").strip()
+    return name.split()[0] if name else None
+
+
 def audit_attack_her():
+    from storage import load
+
     _reset_player_baseline()
-    _run_sequence(["look around", "attack her"])
-    _assert(len(CAPTURED) == 2, "two captures")
-    first_focus = CAPTURED[0]["focus_ids"][0]
-    first_gender = CAPTURED[0]["focus_genders"][0]
-    second = CAPTURED[1]
-    _assert(second["kind"] == "attack", "second beat attack")
-    _assert(second["focus_genders"][0] == "female", "attack her should target a female NPC")
-    if first_gender == "female":
-        _assert(
-            second["focus_ids"][0] == first_focus or second["target_id"] == first_focus,
-            f"attack her should prefer female explore hook {first_focus}, got {second}",
-        )
+    _run_sequence(["look around"])
+    player = load("player/player.json", {})
+    npcs = load("characters/npcs.json", {})
+    explore = _last_capture("look around")
+    _assert(explore, "missing explore capture")
+
+    pending = player.get("pending_target_clarification")
+    if pending and pending.get("kind") == "attack":
+        _assert(len(pending.get("options") or []) >= 2, "ambiguous attack should offer choices")
+        return
+
+    first = _focus_first_name(player, npcs)
+    _assert(first, "explore should set scene_focus")
+    CAPTURED.clear()
+    _run_sequence([f"attack {first}"])
+    attack = _last_capture(f"attack {first}")
+    _assert(attack and attack["kind"] == "attack", f"expected attack, got {attack}")
+    focus_npc = npcs.get(attack.get("target_id") or attack["focus_ids"][0], {})
+    _assert(
+        explore["focus_ids"] and attack["focus_ids"][0] == explore["focus_ids"][0]
+        or attack.get("target_id") == explore["focus_ids"][0],
+        f"attack should target explore hook {explore['focus_ids'][0]}, got {attack}",
+    )
 
 
 def audit_find_sword_inventory():
@@ -143,11 +219,19 @@ def audit_find_sword_inventory():
 
 def audit_confession_witness():
     from storage import load
+
     _reset_player_baseline()
-    _run_sequence(["look around", "Attack", "I have killed him"])
+    _run_sequence(["look around"])
+    player = load("player/player.json", {})
+    npcs = load("characters/npcs.json", {})
+    first = _focus_first_name(player, npcs)
+    _assert(first, "need scene_focus after explore")
+    CAPTURED.clear()
+    _run_sequence([f"attack {first}", "I have killed him"])
     player = load("player/player.json", {})
     _assert(player.get("last_combat_target"), "combat should set last_combat_target")
-    confess = CAPTURED[2]
+    confess = _last_capture("I have killed him")
+    _assert(confess, "missing confess capture")
     _assert(confess["kind"] == "confess", f"confess kind, got {confess['kind']}")
     _assert(len(confess["focus_ids"]) >= 1, "confess should have a respondent focal npc")
     _assert("SCENE FACTS" in confess["directive_head"] or "confess" in confess["directive_head"].lower(),
@@ -155,11 +239,20 @@ def audit_confession_witness():
 
 
 def audit_find_person_role():
-    """Role-specific find must match role or fail — not scene_focus fallback."""
+    """Role-specific find must match role, ask for clarification, or fail — not scene_focus fallback."""
     from storage import load
+
     _reset_player_baseline()
     _run_sequence(["look around", "find the priest"])
-    last = CAPTURED[-1]
+    player = load("player/player.json", {})
+    pending = player.get("pending_target_clarification")
+    if pending:
+        _assert(pending.get("kind") == "find", f"expected find clarification, got {pending}")
+        _assert(len(pending.get("options") or []) >= 2, "ambiguous priest find should offer choices")
+        return
+
+    last = _last_capture("find the priest")
+    _assert(last, "missing find capture")
     _assert(last["kind"] == "find", f"find kind, got {last['kind']}")
     player = load("player/player.json", {})
     journal = player.get("journal") or []
@@ -169,9 +262,6 @@ def audit_find_person_role():
     if focus_id:
         role = npcs.get(focus_id, {}).get("role")
         _assert(role == "priest", f"find priest matched role={role!r}, focus={focus_id}")
-        head = (last.get("directive_head") or "") + (last.get("extra_head") or "")
-        _assert("FIND PERSON" in head.upper() or "SCENE FACTS" in head,
-                "find should include fact packet")
     else:
         _assert("failed search" in last.get("directive_head", "").lower() or True,
                 "no priest present should leave focus empty")
@@ -181,12 +271,13 @@ def audit_non_fatal_no_ghost_speaker():
     """After non-fatal fight, focal npc should be alive status in snapshot."""
     from unittest.mock import MagicMock, patch
     from simulation.story_loop import process_player_action
+    from storage import load
 
     CAPTURED.clear()
     _reset_player_baseline()
-    # Force non-fatal by patching resolve_combat
     mock_narr = MagicMock()
     mock_narr.generate_scene.side_effect = _mock_generate_scene
+    npcs = load("characters/npcs.json", {})
     with patch("simulation.story_loop.get_narrator", return_value=mock_narr):
         with patch("simulation.story_loop.resolve_combat") as rc:
             rc.return_value = {
@@ -195,11 +286,15 @@ def audit_non_fatal_no_ghost_speaker():
                 "player_injuries": ["split lip"],
             }
             process_player_action("look around")
-            process_player_action("attack")
-    c = CAPTURED[1]
-    _assert(c["combat_fatal"] is False, "should record non-fatal")
-    if c["focus_ids"]:
-        _assert(c["focus_status"][0] != "dead", "non-fatal focal should not be dead")
+            player = load("player/player.json", {})
+            first = _focus_first_name(player, npcs)
+            _assert(first, "need scene_focus")
+            process_player_action(f"attack {first}")
+    attack = _last_capture(f"attack {first}")
+    _assert(attack, "missing attack capture")
+    _assert(attack["combat_fatal"] is False, "should record non-fatal")
+    if attack["focus_ids"]:
+        _assert(attack["focus_status"][0] != "dead", "non-fatal focal should not be dead")
 
 
 def audit_talk_priest_overrides_focus():

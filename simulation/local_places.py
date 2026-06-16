@@ -26,8 +26,10 @@ _LOCAL_POI = (
      "wharf", "the wharf"),
     (re.compile(r"\bcellar\b.*\bfishmonger|\bfishmonger\b.*\bcellar\b", re.I),
      "cellar_fishmonger", "the cellar behind the fishmonger"),
-    (re.compile(r"\bcellar\b|\bbasement\b|\bunder(?:ground|croft)\b", re.I),
-     "cellar", "a cellar nearby"),
+    (re.compile(r"\b(?:lower\s+aisle|white\s+stones?)\b", re.I),
+     "lower_aisle", "the white stones of the lower aisle"),
+    (re.compile(r"\bfoundation\s+stones?|lower\s+grate\b", re.I),
+     "foundation", "the foundation stones"),
     (re.compile(r"\bstable[- ]?yard\b|\b(?:lower|upper)\s+stable\b", re.I),
      "stable_yard", "the stable-yard"),
     (re.compile(r"\bcistern\b", re.I),
@@ -36,7 +38,8 @@ _LOCAL_POI = (
 
 _APPROACH_VERBS = re.compile(
     r"\b(enter|go inside|step into|walk into|go in to|go in|approach|"
-    r"go to|head to|walk to|move to|make for|follow(?:\s+the\s+)?(?:noise|sound|trail)?)\b",
+    r"go to|head to|walk to|move to|make for|follow(?:\s+the\s+)?"
+    r"(?:noise|sound|trail|smear|grease|tracks|scrap|line|blood)?)\b",
     re.I,
 )
 

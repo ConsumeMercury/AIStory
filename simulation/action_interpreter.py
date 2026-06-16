@@ -29,7 +29,14 @@ _PATTERNS = [
     (re.compile(r"\b(find|look for|search for)\s+(?:a|an|the|some)?\s*(sword|blade|dagger|knife|weapon|axe|bow|armor|armour|steel)\b", re.I), "search"),
     (re.compile(r"\b(pick up|take|grab|loot)\s+(?:a|an|the|some)?\s*\w", re.I), "search"),
     (re.compile(r"\bfind someone\b", re.I), "find"),
-    (re.compile(r"\bfind (?:the |a )?(?:red[\s-]?haired|captain|priest|merchant|sailor|woman|man|guard|blacksmith)\b", re.I), "find"),
+    (re.compile(r"\bfind (?:the |a )?(?:red[\s-]?haired|captain|priest|cleric|scholar|tutor|merchant|sailor|woman|man|guard|blacksmith)\b", re.I), "find"),
+    (re.compile(
+        r"\b(?:find|look for|locate)\s+(?:the\s+)?"
+        r"(?!a\s+(?:sword|blade|dagger|knife|weapon|axe|bow|armor|armour|steel)\b)"
+        r"[A-Za-z][a-z'-]+(?:\s+[A-Za-z][a-z'-]+)?\b",
+        re.I,
+    ), "find"),
+    (re.compile(r"\bfollow\s+(?:the\s+)?(?:smear|trail|grease|tracks|scrap|line|blood)\b", re.I), "approach"),
     (re.compile(r"\b(attack|strike|kill|fight|stab|swing at|draw .*blade|cut down)\b", re.I), "attack"),
     (re.compile(
         r"\b(enter|go inside|step into|walk into|go in to|go in)\b", re.I,

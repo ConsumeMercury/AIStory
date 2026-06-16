@@ -5,7 +5,8 @@ Patch older saves with storylines, goals, schedules, secrets, drama, and history
 from storage import load, save
 from simulation.player_goals import build_player_goals, attach_goal_profile
 from generation.area_storylines import attach_area_storylines
-from generation.area_generator import ensure_story_districts, annotate_city_gates
+from generation.area_generator import build_areas, ensure_story_districts, annotate_city_gates
+from generation.institution_generator import plan_city_institutions
 from simulation.npc_schedule import attach_schedules, apply_schedules_to_npcs
 from generation.npc_secrets import attach_secrets
 from generation.personal_objectives import attach_personal_objectives
@@ -29,6 +30,14 @@ def ensure_world_extensions():
     loc_changed = False
 
     cities = locations.get("cities", {})
+    if not areas and cities:
+        institution_plan = plan_city_institutions(cities)
+        areas = build_areas(cities, institution_plan=institution_plan)
+        annotate_city_gates(cities, areas)
+        ensure_story_districts(areas, cities, institution_plan=institution_plan, institutions=institutions)
+        changed = True
+        loc_changed = True
+
     if areas and cities:
         before_ids = set(areas.keys())
         needs_travel_patch = any(
@@ -94,6 +103,13 @@ def ensure_world_extensions():
         ensure_equipment(player)
         from simulation.area_discovery import migrate_discovered_areas
         migrate_discovered_areas(player)
+        if areas and player.get("area") and player["area"] not in areas:
+            from game.starting_placement import ensure_start_area
+            city = player.get("location")
+            if city:
+                player["area"] = ensure_start_area(
+                    areas, city, player.get("background", "wanderer"),
+                )
         save("player/player.json", player)
 
     if not load("world/world_state.json", {}).get("bounty_board"):

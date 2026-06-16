@@ -36,7 +36,7 @@ _ROLE_WORDS = {
 SCENARIOS = {
     "dock_fight": [
         "look around",
-        "attack her",
+        "attack the sailor",
         "find a sword",
         "attack anyway",
         "I have killed him",
@@ -155,6 +155,11 @@ def reset_baseline(*, area_only_npcs=True):
     area = player.get("area")
     loc = player.get("location")
     npcs = load("characters/npcs.json", {})
+    try:
+        from scripts.simulation_audit import _restore_npc_home_areas
+        _restore_npc_home_areas(npcs)
+    except Exception:
+        pass
     for npc in npcs.values():
         in_scope = npc.get("area") == area if area_only_npcs else True
         if not in_scope and loc and npc.get("location") != loc:
@@ -274,11 +279,13 @@ def mechanical_checks(action, kind, before, after, journal_entry, npcs):
             issues.append("find sword should add inventory item")
 
     if kind == "attack":
-        if not after.get("last_combat_target"):
+        if journal_entry.get("target_ambiguous"):
+            pass
+        elif not after.get("last_combat_target"):
             issues.append("attack missing last_combat_target")
-        if not journal_entry.get("focus_npc"):
+        elif not journal_entry.get("focus_npc"):
             issues.append("attack missing focus_npc in journal")
-        if journal_entry.get("combat_fatal") is True:
+        elif journal_entry.get("combat_fatal") is True:
             tid = after.get("last_combat_target")
             target = npcs.get(tid, {}) if tid else {}
             if target.get("status") != "dead":

@@ -12,14 +12,13 @@ from simulation.target_resolution import (
     action_mentions_role_or_descriptor,
     resolve_action_target,
     find_npc_by_name_in_text,
+    npc_matches_action_role_hint,
 )
 
 DIALOGUE_KINDS = frozenset({
     "talk", "personal_talk", "ask_name", "help", "give", "threaten",
     "insult", "show_respect", "withdraw", "ask_about", "find", "guild", "confess",
 })
-
-_SUBPLACE_PATTERNS = ()  # legacy — see simulation/local_places.py
 
 _ASK_NAMED = re.compile(
     r"^\s*ask\s+([A-Za-z][A-Za-z'-]{1,28})\s+about\s+(.+)$", re.I,
@@ -124,37 +123,28 @@ def resolve_target_and_absence(action, player, present, npcs, action_ctx, world,
         if player.get("scene_focus") == tid:
             player["scene_focus"] = None
 
-    if kind in DIALOGUE_KINDS and not action_ctx.get("target_id") and present:
-        resolved = resolve_action_target(
-            action, player, present, npcs=npcs, kind=kind,
-        )
-        if resolved:
-            action_ctx["target_id"] = resolved["id"]
-        elif not action_mentions_role_or_descriptor(action, present=present):
-            focus = player.get("scene_focus")
-            if focus and focus in present_ids:
-                action_ctx["target_id"] = focus
-            elif len(present) == 1:
-                action_ctx["target_id"] = present[0]["id"]
+    if kind in DIALOGUE_KINDS and present:
+        has_role = action_mentions_role_or_descriptor(action, present=present)
+        tid = action_ctx.get("target_id")
+        if tid and tid in present_ids and has_role:
+            current = next((n for n in present if n["id"] == tid), None)
+            if current and not npc_matches_action_role_hint(action, current):
+                action_ctx["target_id"] = None
 
-
-def is_dialogue_continuation(kind, player, action_ctx, journal):
-    if kind not in DIALOGUE_KINDS:
-        return False
-    if action_ctx.get("absent_npc"):
-        return False
-    if not journal:
-        return False
-    last = journal[-1]
-    if last.get("area") != player.get("area"):
-        return False
-    tid = action_ctx.get("target_id")
-    focus = player.get("scene_focus")
-    if tid and (tid == focus or last.get("focus_npc") == tid):
-        return True
-    if kind in ("talk", "help", "threaten", "ask_name", "show_respect", "give", "insult"):
-        return last.get("kind") in DIALOGUE_KINDS
-    return False
+        if not action_ctx.get("target_id") or has_role:
+            resolved = resolve_action_target(
+                action, player, present, npcs=npcs, kind=kind,
+            )
+            if resolved:
+                action_ctx["target_id"] = resolved["id"]
+            elif has_role:
+                action_ctx["target_id"] = None
+            elif not action_ctx.get("target_id"):
+                focus = player.get("scene_focus")
+                if focus and focus in present_ids:
+                    action_ctx["target_id"] = focus
+                elif len(present) == 1:
+                    action_ctx["target_id"] = present[0]["id"]
 
 
 def build_conversation_ledger(player, journal, npc_id, action_ctx):
