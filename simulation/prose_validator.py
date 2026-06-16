@@ -293,6 +293,37 @@ def build_beat_context(last, player, npcs):
     return ctx
 
 
+def focus_role_switch_issue(player, action_ctx, journal, npcs):
+    """Flag when a role address resolves to a different NPC than the last dialogue partner."""
+    from simulation.target_resolution import action_mentions_role_or_descriptor
+
+    if not journal:
+        return None
+    last = journal[-1]
+    last_focus = last.get("focus_npc")
+    new_focus = (action_ctx or {}).get("target_id") or (action_ctx or {}).get("focal_npc_id")
+    if not last_focus or not new_focus or last_focus == new_focus:
+        return None
+    if last.get("kind") not in _FOCAL_DIALOGUE_KINDS:
+        return None
+    kind = (action_ctx or {}).get("kind")
+    if kind not in _FOCAL_DIALOGUE_KINDS:
+        return None
+    action = (action_ctx or {}).get("action_summary") or ""
+    present = (action_ctx or {}).get("present_npcs") or []
+    if not action_mentions_role_or_descriptor(action, present=present):
+        return None
+    last_npc = (npcs or {}).get(last_focus, {})
+    new_npc = (npcs or {}).get(new_focus, {})
+    last_name = last_npc.get("name") or last_focus
+    new_name = new_npc.get("name") or new_focus
+    role = last_npc.get("role") or new_npc.get("role") or "role"
+    return (
+        f"role address switched focal NPC from {last_name!r} to {new_name!r} "
+        f"(same {role!r} thread — likely wrong person)"
+    )
+
+
 def validate_scene_prose(text, *, player, npcs, action_ctx, focal_npc_id,
                          scene_place, present_npcs, known_ids=None):
     """Return human-readable prose validation issues for a live turn."""
@@ -303,7 +334,13 @@ def validate_scene_prose(text, *, player, npcs, action_ctx, focal_npc_id,
     ctx["known_ids"] = known_ids or set()
     if focal_npc_id and not ctx.get("target_id"):
         ctx["target_id"] = focal_npc_id
-    return analyze_prose(text, ctx, player, npcs)
+    issues = analyze_prose(text, ctx, player, npcs)
+    switch = focus_role_switch_issue(
+        player, ctx, player.get("journal") or [], npcs,
+    )
+    if switch:
+        issues.append(switch)
+    return issues
 
 
 def log_scene_prose_issues(text, *, player, npcs, action_ctx, focal_npc_id,

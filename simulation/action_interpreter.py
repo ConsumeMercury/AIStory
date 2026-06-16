@@ -67,11 +67,27 @@ _INTENT_WORDS = {
 }
 
 
-def extract_player_speech(action, player=None):
+def speech_for_ask_name(action):
+    """Canonical name question unless the player used explicit quotes."""
+    text = (action or "").strip()
+    if not text:
+        return "What is your name?"
+    m = _QUOTED.search(text)
+    if m:
+        quoted = (m.group(1) or m.group(2)).strip()
+        if quoted:
+            return quoted
+    return "What is your name?"
+
+
+def extract_player_speech(action, player=None, *, kind=None):
     """Words the protagonist actually says aloud, if any."""
     text = (action or "").strip()
     if not text:
         return None
+
+    if kind == "ask_name":
+        return speech_for_ask_name(action)
 
     m = _QUOTED.search(text)
     if m:
@@ -148,7 +164,7 @@ def interpret_action(action, player, present_npcs, world, npcs=None):
 
     target = _target_hint(action, present_npcs, player, npcs=npcs, kind=kind)
     target_descriptor = short_descriptor(target) if target else None
-    speech = extract_player_speech(action, player)
+    speech = extract_player_speech(action, player, kind=kind)
     if kind == "general" and speech and speech.lower().startswith("my name is"):
         kind = "talk"
 
@@ -217,7 +233,7 @@ def interpret_action(action, player, present_npcs, world, npcs=None):
     elif kind == "ask_name":
         ctx["relationship"] = ("charm", 0.35)
         ctx["skill_xp"] = ("empathy", 6)
-        speech = extract_player_speech(action, player) or "What is your name?"
+        speech = speech_for_ask_name(action)
         ctx["player_speech"] = speech
         ctx["story_directive"] = (
             f"The protagonist asks: \"{speech}\" "

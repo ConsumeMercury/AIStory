@@ -86,7 +86,6 @@ def _run_tick():
         )
 
         _run_engine("advance_storylines", advance_storylines, tick=tick)
-        _run_engine("advance_clock", advance_clock)
         _run_engine("flush_events", flush_events)
 
         player = _load("player/player.json", {})

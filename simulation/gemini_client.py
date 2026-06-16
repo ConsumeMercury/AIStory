@@ -157,6 +157,24 @@ def _call_with_retries(client, model, prompt, *, cap, temperature, top_p):
     raise last_err
 
 
+def _append_stream_piece(parts, piece):
+    """Join stream deltas without losing word boundaries."""
+    if not piece:
+        return None
+    if parts:
+        prev = parts[-1]
+        if (
+            prev
+            and prev[-1].isalnum()
+            and piece[0].isalnum()
+            and not prev.endswith(("-", "—", "'", '"'))
+            and not piece.startswith(("-", "—", "'", '"', ".", ",", ";", ":", "!", "?"))
+        ):
+            piece = " " + piece
+    parts.append(piece)
+    return piece
+
+
 def _generate_stream_once(client, model, prompt, *, cap, temperature, top_p):
     return client.models.generate_content_stream(
         model=model,
@@ -197,8 +215,8 @@ def generate_text_stream(prompt, *, temperature=0.78, top_p=0.88, max_tokens=Non
                     piece = _extract_text(chunk)
                     if not piece:
                         continue
-                    parts.append(piece)
-                    if on_chunk:
+                    piece = _append_stream_piece(parts, piece)
+                    if on_chunk and piece:
                         on_chunk(piece)
                 text = "".join(parts).strip()
                 if not text:

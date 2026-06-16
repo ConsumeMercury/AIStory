@@ -92,6 +92,40 @@ def find_npc_by_name_in_text(text, npcs, player):
     return None
 
 
+def npc_matches_action_role_hint(action, npc):
+    """True when this NPC fits a role/descriptor mentioned in the action."""
+    if not action or not npc:
+        return False
+    from simulation.action_resolution import match_npc_by_description
+
+    alone = match_npc_by_description(action, [npc])
+    if alone and alone["id"] == npc.get("id"):
+        return True
+    text = action.lower()
+    role = (npc.get("role") or "").replace("_", " ")
+    for token in role.split():
+        if len(token) >= 4 and re.search(rf"\b{re.escape(token)}\b", text):
+            return True
+    occ = (npc.get("occupation") or "").replace("_", " ")
+    for token in occ.split():
+        if len(token) >= 4 and token != role and re.search(rf"\b{re.escape(token)}\b", text):
+            return True
+    return False
+
+
+def _focus_matching_role_hint(action, player, present):
+    """Keep scene_focus when that NPC satisfies the role hint — don't swap strangers."""
+    if not action_mentions_role_or_descriptor(action, present=present):
+        return None
+    focus_id = player.get("scene_focus")
+    if not focus_id:
+        return None
+    for npc in present:
+        if npc.get("id") == focus_id and npc_matches_action_role_hint(action, npc):
+            return npc
+    return None
+
+
 def action_mentions_role_or_descriptor(action, present=None):
     if not action:
         return False
@@ -122,6 +156,10 @@ def resolve_action_target(action, player, present, npcs=None, kind="general"):
                 if n["id"] == named["id"]:
                     return n
             return None
+
+    sticky = _focus_matching_role_hint(action, player, present)
+    if sticky:
+        return sticky
 
     role_match = match_npc_by_description(action, present)
     if role_match:

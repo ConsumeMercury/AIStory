@@ -66,7 +66,7 @@ from simulation.district_state import district_narrator_block
 from simulation.institution_politics import politics_narrator_block
 from generation.world_history import history_block
 from generation.location_generator import city_check_modifier
-from simulation.world_clock import advance_clock
+from simulation.world_clock import advance_for_action
 from simulation import simulation_runner
 from simulation.action_resolution import (
     resolve_combat_target,
@@ -331,6 +331,13 @@ def process_player_action(action, *, on_prose_chunk=None):
     sync_scene_focus(player, present, npcs)
     action_ctx = interpret_action(action, player, present, world, npcs=npcs)
     kind = action_ctx["kind"]
+
+    with state_lock():
+        world = load(WORLD_FILE, {})
+        advance_for_action(kind)
+        world = load(WORLD_FILE, {})
+        save(WORLD_FILE, world)
+
     areas_data = load(AREAS_FILE, {})
     resolve_target_and_absence(action, player, present, npcs, action_ctx, world, areas_data)
     kind = action_ctx["kind"]
@@ -466,7 +473,6 @@ def process_player_action(action, *, on_prose_chunk=None):
             extra_directive = fail_msg
 
     if kind == "wait":
-        advance_clock(2)
         with state_lock():
             world = load(WORLD_FILE, {})
             npcs = load(NPC_FILE, {})
@@ -491,14 +497,22 @@ def process_player_action(action, *, on_prose_chunk=None):
                 )
 
     if kind == "ask_name":
-        target = pick_name_target(player, present, action)
-        if target:
-            action_ctx["target_id"] = target["id"]
-            name_reveal = {
-                "npc_id": target["id"],
-                "name": target["name"],
-                "descriptor": short_descriptor(target),
-            }
+        if not action_ctx.get("target_id"):
+            target = pick_name_target(player, present, action)
+            if target:
+                action_ctx["target_id"] = target["id"]
+        target_id = action_ctx.get("target_id")
+        if target_id:
+            target_npc = next((n for n in present if n["id"] == target_id), None)
+            if not target_npc:
+                target_npc = npcs.get(target_id)
+            known = player.get("known_npcs", {}).get(target_id, {})
+            if target_npc and not known.get("name_known"):
+                name_reveal = {
+                    "npc_id": target_id,
+                    "name": target_npc["name"],
+                    "descriptor": short_descriptor(target_npc),
+                }
 
     with state_lock():
         player = load(PLAYER_FILE, {})

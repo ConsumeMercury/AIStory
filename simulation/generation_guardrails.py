@@ -15,7 +15,7 @@ GUARDRAIL_RULES = (
     "IDENTITY: Same NPC — same gender, role, and persona register every beat.",
     "PLAYER: Quote protagonist speech exactly once when given; never invent their lines.",
     "WITHDRAW: End exchange; clear focus after — do not continue old thread next beat unless player re-engages.",
-    "TARGET: Role hints (priest, clerk, guard) override stale scene_focus.",
+    "TARGET: Role hints pick a matching NPC; keep scene_focus when that NPC fits the hint.",
 )
 
 
