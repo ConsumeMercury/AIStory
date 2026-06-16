@@ -775,14 +775,60 @@ def snapshot_for_delta(player):
     }
 
 
+def get_investigation_panel(player, npcs=None):
+    case = player.get("active_case")
+    if not case:
+        return None
+    npcs = npcs or load(NPC_FILE, {})
+    stage = case.get("stage", 0)
+    stages = case.get("stages") or []
+    stage_label = stages[min(stage, len(stages) - 1)] if stages else ""
+    clues = [
+        {"text": ev.get("text", ""), "type": ev.get("type", "")}
+        for ev in case.get("evidence", [])
+        if ev.get("discovered")
+    ]
+    suspects = [
+        {"id": sid, "name": npcs.get(sid, {}).get("name", "?")}
+        for sid in case.get("suspect_ids", [])
+    ]
+    accused_id = case.get("accused_id")
+    return {
+        "active": not case.get("solved"),
+        "title": case.get("title", "Mystery"),
+        "kind": case.get("kind", "murder"),
+        "stage": stage + 1,
+        "stage_total": len(stages) or 4,
+        "stage_label": stage_label,
+        "victim_name": case.get("victim_name"),
+        "clues": clues[:6],
+        "suspects": suspects[:4],
+        "solved": bool(case.get("solved")),
+        "accused_name": npcs.get(accused_id, {}).get("name") if accused_id else None,
+    }
+
+
 def get_full_state():
+    from config.debug import debug_enabled
     from game.undo import can_undo
     from simulation.gemini_client import api_key
+    from simulation.investigation_cases import sanitize_active_case
+    from simulation.story_loop import _present_npcs
+    from storage import save
 
     player = load(PLAYER_FILE, {})
     if not player:
         return None
     world = load(WORLD_FILE, {})
+    npcs = load(NPC_FILE, {})
+    areas = load(AREAS_FILE, {})
+    present = _present_npcs(npcs, player)
+    _, case_changed = sanitize_active_case(
+        player, npcs, areas, present_ids=[n["id"] for n in present],
+    )
+    if case_changed:
+        save(PLAYER_FILE, player)
+        save(NPC_FILE, npcs)
     return {
         "header": get_header_bar(player, world),
         "player": get_player_panel(player),
@@ -796,9 +842,11 @@ def get_full_state():
         "codex": get_codex_view(player),
         "timeline": get_timeline_view(player),
         "story_history": get_story_history(player),
+        "investigation": get_investigation_panel(player, npcs),
         "help": HELP_COMMANDS,
         "session": {
             "can_undo": can_undo(),
             "gemini_configured": bool(api_key()),
+            "debug_enabled": debug_enabled(),
         },
     }

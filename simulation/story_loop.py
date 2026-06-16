@@ -29,6 +29,7 @@ from simulation.generation_guardrails import build_hard_constraints_block
 from simulation.prose_validator import log_scene_prose_issues
 from simulation.npc_continuity import ensure_npc_continuity_locks
 from simulation.journal_summary import maybe_compact_journal
+from simulation.narrative_continuity import update_npc_narrative_cache
 from simulation.npc_memory_engine import record_player_action
 from simulation.skill_check import run_action_check, apply_check_costs
 from simulation.player_identity import (
@@ -56,7 +57,7 @@ from simulation.consequence_queue import register_from_action, pop_delayed_direc
 from simulation.npc_drama import format_drama_block
 from simulation.rival_engine import bump_notoriety, maybe_spawn_rival, rival_directive
 from simulation.player_legacy import legacy_from_action, legacy_narrator_block
-from simulation.investigation_cases import ensure_case, advance_case, case_narrator_block
+from simulation.investigation_cases import ensure_case, advance_case, case_narrator_block, sanitize_active_case
 from simulation.storyline_behavior import narrator_storyline_block
 from game.starting_placement import starting_pipeline_narrator_block
 from game.state_context import state_lock
@@ -326,6 +327,16 @@ def process_player_action(action, *, on_prose_chunk=None):
     area_before = player.get("area")
     present = _present_npcs(npcs, player)
     sync_scene_focus(player, present, npcs)
+    if player.get("active_case") and not player["active_case"].get("solved"):
+        areas_for_case = load(AREAS_FILE, {})
+        _, case_changed = sanitize_active_case(
+            player, npcs, areas_for_case, present_ids=[n["id"] for n in present],
+        )
+        if case_changed:
+            with state_lock():
+                save(PLAYER_FILE, player)
+                save(NPC_FILE, npcs)
+
     action_ctx = interpret_action(action, player, present, world, npcs=npcs)
     kind = action_ctx["kind"]
 
@@ -847,6 +858,13 @@ def process_player_action(action, *, on_prose_chunk=None):
     with state_lock():
         player = load(PLAYER_FILE, {})
         update_player_goals(player, kind, action_ctx, world)
+        cache_id = focal_id or action_ctx.get("target_id") or player.get("scene_focus")
+        if cache_id and scene:
+            if update_npc_narrative_cache(
+                player, cache_id, scene, npcs,
+                player_speech=action_ctx.get("player_speech"),
+            ):
+                save(PLAYER_FILE, player)
         if kind == "investigate":
             focus_npc = None
         else:
@@ -885,6 +903,7 @@ def process_player_action(action, *, on_prose_chunk=None):
         area_arrival=area_arrival,
         prose_issues=prose_issues or None,
         memory_debug=action_ctx.get("memory_debug"),
+        generation_settings=action_ctx.get("generation_settings"),
     )
 
     return scene

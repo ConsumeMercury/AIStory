@@ -124,19 +124,60 @@ def generate_mystery(area_id, npcs, areas, *, player=None, present_ids=None, kin
     return case, npcs_changed
 
 
-def ensure_case(player, area_id, npcs, areas, *, present_ids=None):
-    """Return active case or generate one on first investigation."""
+def is_active_case_invalid(case, player, npcs, present_ids=None):
+    """True when a saved case violates murder-victim rules."""
+    if not case or case.get("solved"):
+        return False
+    victim_id = case.get("victim_id")
+    if not victim_id or victim_id not in npcs:
+        return True
+    victim = npcs[victim_id]
+    present_ids = present_ids or []
+    exclude = _victim_exclusions(player, present_ids)
+    if victim_id in exclude:
+        return True
+    if case.get("kind", "murder") == "murder":
+        if victim.get("status") == "alive" and (
+            victim_id in present_ids or victim_id == player.get("scene_focus")
+        ):
+            return True
+    return False
+
+
+def sanitize_active_case(player, npcs, areas, *, present_ids=None):
+    """Drop and rebuild an active case that violates victim rules."""
     case = player.get("active_case")
-    if case and not case.get("solved") and case.get("area_id") == area_id:
+    if not case or case.get("solved"):
         return case, False
-    if case and not case.get("solved"):
+    if not is_active_case_invalid(case, player, npcs, present_ids):
         return case, False
+
+    area_id = case.get("area_id") or player.get("area")
+    player.pop("active_case", None)
     new_case, npcs_changed = generate_mystery(
-        area_id, npcs, areas, player=player, present_ids=present_ids,
+        area_id, npcs, areas, player=player, present_ids=present_ids or [],
     )
     if new_case:
         player["active_case"] = new_case
     return new_case, npcs_changed
+
+
+def ensure_case(player, area_id, npcs, areas, *, present_ids=None):
+    """Return active case or generate one on first investigation."""
+    _, npcs_changed = sanitize_active_case(
+        player, npcs, areas, present_ids=present_ids,
+    )
+    case = player.get("active_case")
+    if case and not case.get("solved") and case.get("area_id") == area_id:
+        return case, npcs_changed
+    if case and not case.get("solved"):
+        return case, npcs_changed
+    new_case, changed = generate_mystery(
+        area_id, npcs, areas, player=player, present_ids=present_ids,
+    )
+    if new_case:
+        player["active_case"] = new_case
+    return new_case, npcs_changed or changed
 
 
 def advance_case(player, action_kind, action_ctx, npcs):

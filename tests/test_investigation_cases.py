@@ -62,3 +62,43 @@ def test_case_block_warns_when_victim_alive_and_present():
     block = case_narrator_block(player, npcs, present_ids=["fahir"])
     assert "do not treat anyone present as the corpse" in block.lower()
     assert "alive here" in block.lower()
+
+
+def test_sanitize_rebuilds_invalid_case():
+    from simulation.investigation_cases import is_active_case_invalid, sanitize_active_case
+
+    npcs = {
+        "fahir": _npc("fahir", name="Fahir al-Zahir"),
+        "zera": _npc("zera", name="Zera Kveld"),
+        "other": _npc("other", name="Other Person"),
+        "extra": _npc("extra", name="Extra Person"),
+    }
+    player = {
+        "area": "ashmoor:market",
+        "scene_focus": "fahir",
+        "starting_pipeline": {"key_npc_ids": ["fahir"]},
+        "active_case": {
+            "id": "stale01",
+            "kind": "murder",
+            "area_id": "ashmoor:market",
+            "title": "Stale case",
+            "victim_id": "fahir",
+            "victim_name": "Fahir al-Zahir",
+            "stage": 0,
+            "stages": ["learn what happened", "identify suspects", "find proof", "accuse or expose"],
+            "suspect_ids": [],
+            "evidence": [],
+            "solved": False,
+        },
+    }
+    areas = {"ashmoor:market": {"name": "Market"}}
+    present_ids = ["fahir", "zera"]
+
+    assert is_active_case_invalid(player["active_case"], player, npcs, present_ids)
+
+    new_case, changed = sanitize_active_case(player, npcs, areas, present_ids=present_ids)
+    assert changed is True
+    assert new_case is not None
+    assert new_case["victim_id"] != "fahir"
+    assert new_case["victim_id"] not in present_ids
+    assert npcs[new_case["victim_id"]]["status"] == "dead"

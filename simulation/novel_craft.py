@@ -152,6 +152,72 @@ def narrative_outcome(check):
     )
 
 
+DEFAULT_TEMPERATURE = 0.78
+DEFAULT_FREQUENCY_PENALTY = 0.22
+
+# Fact-sensitive beats: lower temperature reduces invented outcomes.
+TEMPERATURE_BY_KIND = {
+    "attack": 0.55,
+    "confess": 0.60,
+    "ask_name": 0.60,
+    "search": 0.62,
+    "accuse": 0.62,
+    "blackmail": 0.65,
+    "trade": 0.68,
+    "steal": 0.65,
+    "withdraw": 0.70,
+    "ask_about": 0.72,
+    "talk": 0.75,
+    "show_respect": 0.74,
+    "insult": 0.74,
+    "threaten": 0.72,
+    "give": 0.74,
+    "help": 0.74,
+    "find": 0.70,
+    "guild": 0.74,
+    "investigate": 0.78,
+    "examine": 0.80,
+    "observe": 0.82,
+    "hunt": 0.78,
+    "personal_talk": 0.82,
+    "explore": 0.88,
+    "travel": 0.86,
+    "rest": 0.85,
+    "approach": 0.83,
+}
+
+# Mild lexical repetition penalty — composes with prompt-level motif bans.
+FREQUENCY_PENALTY_BY_KIND = {
+    "explore": 0.35,
+    "travel": 0.32,
+    "rest": 0.30,
+    "approach": 0.28,
+    "investigate": 0.28,
+    "observe": 0.28,
+    "examine": 0.26,
+    "talk": 0.22,
+    "ask_about": 0.22,
+    "personal_talk": 0.24,
+    "withdraw": 0.20,
+    "attack": 0.12,
+    "confess": 0.10,
+    "ask_name": 0.10,
+    "search": 0.12,
+    "accuse": 0.12,
+}
+
+
+def temperature_for_kind(action_kind):
+    return TEMPERATURE_BY_KIND.get(action_kind, DEFAULT_TEMPERATURE)
+
+
+def frequency_penalty_for_kind(action_kind):
+    import os
+    if os.environ.get("AISTORY_SKIP_FREQUENCY_PENALTY", "").lower() in ("1", "true", "yes"):
+        return 0.0
+    return FREQUENCY_PENALTY_BY_KIND.get(action_kind, DEFAULT_FREQUENCY_PENALTY)
+
+
 def token_budget_for_kind(action_kind):
     """Tight budgets keep scenes conversational — player acts every turn."""
     return {

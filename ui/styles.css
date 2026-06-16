@@ -124,6 +124,15 @@ body.modal-open {
 .mini-bar .fill.stamina { background: var(--stamina); }
 .mini-bar .val { font-variant-numeric: tabular-nums; min-width: 2.5rem; }
 .wealth-tag { color: var(--wealth); }
+.debug-tag {
+  margin-left: auto;
+  font-size: 0.58rem;
+  letter-spacing: 0.12em;
+  color: var(--accent-warn, #c9a227);
+  border: 1px solid var(--accent-warn, #c9a227);
+  padding: 0.1rem 0.35rem;
+  border-radius: 2px;
+}
 
 /* Main grid — story dominates, aftermath on the right */
 .main-grid {
@@ -464,6 +473,32 @@ body.modal-open {
   padding: 0;
 }
 .sb-goals li::marker { color: var(--accent-dim); }
+
+.inv-title {
+  font-family: var(--font-serif);
+  color: var(--text);
+  font-size: 0.85rem;
+}
+.inv-stage {
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  margin-top: 0.2rem;
+}
+.inv-clues {
+  margin: 0.35rem 0 0 1rem;
+  padding: 0;
+}
+.inv-clues li {
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  padding: 0.15rem 0;
+}
+.inv-clues li.inv-empty {
+  list-style: none;
+  margin-left: -1rem;
+  font-style: italic;
+  color: var(--text-muted);
+}
 
 .rel-card {
   margin-bottom: 0.55rem;

@@ -58,14 +58,17 @@ def _thinking_config(model):
     return types.ThinkingConfig(thinking_level="minimal")
 
 
-def _generation_config(model, *, max_tokens, temperature=None, top_p=None):
+def _generation_config(model, *, max_tokens, temperature=None, top_p=None, frequency_penalty=None):
     kwargs = {
         "max_output_tokens": max_tokens,
         "thinking_config": _thinking_config(model),
     }
-    if "2.5" in model.lower() and temperature is not None:
+    if temperature is not None:
         kwargs["temperature"] = temperature
+    if top_p is not None:
         kwargs["top_p"] = top_p
+    if frequency_penalty is not None and frequency_penalty > 0:
+        kwargs["frequency_penalty"] = frequency_penalty
     return types.GenerateContentConfig(**kwargs)
 
 
@@ -121,7 +124,7 @@ def _retryable_api_error(err):
     return "UNAVAILABLE" in msg or "RESOURCE_EXHAUSTED" in msg or "HIGH DEMAND" in msg
 
 
-def _generate_once(client, model, prompt, *, cap, temperature, top_p):
+def _generate_once(client, model, prompt, *, cap, temperature, top_p, frequency_penalty=None):
     return client.models.generate_content(
         model=model,
         contents=prompt,
@@ -130,6 +133,7 @@ def _generate_once(client, model, prompt, *, cap, temperature, top_p):
             max_tokens=cap,
             temperature=temperature,
             top_p=top_p,
+            frequency_penalty=frequency_penalty,
         ),
     )
 
@@ -152,13 +156,14 @@ def _looks_truncated(text, response):
     return False
 
 
-def _call_with_retries(client, model, prompt, *, cap, temperature, top_p):
+def _call_with_retries(client, model, prompt, *, cap, temperature, top_p, frequency_penalty=None):
     """Retry transient Gemini overload / rate-limit errors with backoff."""
     last_err = None
     for attempt in range(API_RETRY_ATTEMPTS):
         try:
             return _generate_once(
                 client, model, prompt, cap=cap, temperature=temperature, top_p=top_p,
+                frequency_penalty=frequency_penalty,
             )
         except Exception as e:
             last_err = e
@@ -187,7 +192,7 @@ def _append_stream_piece(parts, piece):
     return piece
 
 
-def _generate_stream_once(client, model, prompt, *, cap, temperature, top_p):
+def _generate_stream_once(client, model, prompt, *, cap, temperature, top_p, frequency_penalty=None):
     return client.models.generate_content_stream(
         model=model,
         contents=prompt,
@@ -196,11 +201,13 @@ def _generate_stream_once(client, model, prompt, *, cap, temperature, top_p):
             max_tokens=cap,
             temperature=temperature,
             top_p=top_p,
+            frequency_penalty=frequency_penalty,
         ),
     )
 
 
-def generate_text_stream(prompt, *, temperature=0.78, top_p=0.88, max_tokens=None, on_chunk=None):
+def generate_text_stream(prompt, *, temperature=0.78, top_p=0.88, max_tokens=None, on_chunk=None,
+                         frequency_penalty=None):
     """Stream generated prose; invoke on_chunk for each text delta; return full text."""
     from google.genai import errors as genai_errors
 
@@ -221,6 +228,7 @@ def generate_text_stream(prompt, *, temperature=0.78, top_p=0.88, max_tokens=Non
                 last_response = None
                 stream = _call_with_retries_stream(
                     client, model, prompt, cap=cap, temperature=temperature, top_p=top_p,
+                    frequency_penalty=frequency_penalty,
                 )
                 for chunk in stream:
                     last_response = chunk
@@ -264,13 +272,14 @@ def generate_text_stream(prompt, *, temperature=0.78, top_p=0.88, max_tokens=Non
     raise RuntimeError(hint)
 
 
-def _call_with_retries_stream(client, model, prompt, *, cap, temperature, top_p):
+def _call_with_retries_stream(client, model, prompt, *, cap, temperature, top_p, frequency_penalty=None):
     """Retry transient Gemini overload / rate-limit errors with backoff (streaming)."""
     last_err = None
     for attempt in range(API_RETRY_ATTEMPTS):
         try:
             return _generate_stream_once(
                 client, model, prompt, cap=cap, temperature=temperature, top_p=top_p,
+                frequency_penalty=frequency_penalty,
             )
         except Exception as e:
             last_err = e
@@ -281,7 +290,7 @@ def _call_with_retries_stream(client, model, prompt, *, cap, temperature, top_p)
     raise last_err
 
 
-def generate_text(prompt, *, temperature=0.78, top_p=0.88, max_tokens=None):
+def generate_text(prompt, *, temperature=0.78, top_p=0.88, max_tokens=None, frequency_penalty=None):
     """Send a single prompt; return complete generated prose."""
     from google.genai import errors as genai_errors
 
@@ -300,6 +309,7 @@ def generate_text(prompt, *, temperature=0.78, top_p=0.88, max_tokens=None):
             for cap in caps:
                 response = _call_with_retries(
                     client, model, prompt, cap=cap, temperature=temperature, top_p=top_p,
+                    frequency_penalty=frequency_penalty,
                 )
                 text = _extract_text(response)
                 if not text:

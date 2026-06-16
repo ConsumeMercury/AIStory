@@ -23,7 +23,11 @@ from simulation.player_identity import player_alias
 from simulation.immersion_context import (
     institution_affiliation, npc_active_want,
 )
-from simulation.novel_craft import CRAFT_CORE, craft_for_kind, narrative_outcome, token_budget_for_kind
+from simulation.novel_craft import (
+    CRAFT_CORE, craft_for_kind, narrative_outcome, token_budget_for_kind,
+    temperature_for_kind, frequency_penalty_for_kind,
+)
+from simulation.narrative_continuity import build_narrative_continuity_block
 from simulation.generation_guardrails import guardrails_prompt_block, build_hard_constraints_block
 from simulation.gemini_client import generate_text, generate_text_stream
 from simulation.memory_context import build_memory_context
@@ -284,6 +288,10 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
     continuity_block = build_continuity_note(
         journal, kind, player_action, player=player, action_context=action_context,
     )
+    narrative_block = build_narrative_continuity_block(
+        player, journal, focal_npc_id, npcs_all,
+        known_ids=known_ids, area_id=aid, action_kind=kind,
+    )
     mode_block = scene_mode_rules(kind, has_journal)
     length_block = scene_length_hint(kind, opening=not has_journal and kind == "explore")
 
@@ -340,6 +348,7 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
         length_block,
         mode_block,
         continuity_block,
+        narrative_block,
         memory_block,
         ledger_block,
         scene_facts,
@@ -387,9 +396,22 @@ def generate_scene(player_action, world, player, present_npcs,
         print("Model:", os.environ.get("GEMINI_MODEL", "gemini-3.5-flash"))
         print("======================\n")
 
-    gen_kwargs = dict(max_tokens=token_budget, temperature=0.82, top_p=0.9)
+    kind = (action_context or {}).get("kind", "general")
+    gen_temp = temperature_for_kind(kind)
+    gen_penalty = frequency_penalty_for_kind(kind)
+    gen_kwargs = dict(
+        max_tokens=token_budget,
+        temperature=gen_temp,
+        top_p=0.9,
+        frequency_penalty=gen_penalty,
+    )
     if action_context is not None:
         action_context["memory_debug"] = _memory_debug
+        action_context["generation_settings"] = {
+            "temperature": gen_temp,
+            "frequency_penalty": gen_penalty,
+            "kind": kind,
+        }
     if on_prose_chunk:
         return generate_text_stream(prompt, on_chunk=on_prose_chunk, **gen_kwargs)
     return generate_text(prompt, **gen_kwargs)

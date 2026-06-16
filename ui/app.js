@@ -206,39 +206,51 @@ function renderDeltaPanel(turn) {
   }
 }
 
-function renderMemoryDebug(memory) {
+function renderTurnDebug(debug) {
+  if (!debug) return;
   const body = $("#delta-body");
-  if (!body || !memory) return;
-  const used = memory.tokens_used || {};
-  const cap = memory.tokens_cap || {};
-  const evictions = memory.evictions || [];
-  const rows = Object.keys(cap).map(
-    (k) => `<div class="delta-prose-issue">${esc(k)}: ${used[k] || 0} / ${cap[k] || "?"} tokens</div>`,
-  );
-  const block = `
-    <div class="delta-section delta-prose-debug">
-      <div class="delta-section-label">Memory budget</div>
-      ${rows.join("")}
-      ${evictions.length ? `<div class="delta-section-label">Evictions</div>${evictions.map((e) => `<div class="delta-prose-issue">${esc(e)}</div>`).join("")}` : ""}
-    </div>`;
-  const empty = body.querySelector(".delta-empty");
-  if (empty) {
-    body.innerHTML = block;
-    return;
+  if (!body) return;
+
+  const sections = [];
+
+  if (debug.generation_settings) {
+    const g = debug.generation_settings;
+    sections.push(`
+      <div class="delta-section delta-prose-debug">
+        <div class="delta-section-label">Generation</div>
+        <div class="delta-prose-issue">Kind: ${esc(g.kind || "—")}</div>
+        <div class="delta-prose-issue">Temperature: ${esc(g.temperature ?? "—")}</div>
+        <div class="delta-prose-issue">Frequency penalty: ${esc(g.frequency_penalty ?? "—")}</div>
+      </div>`);
   }
-  body.insertAdjacentHTML("beforeend", block);
-}
 
-function renderProseValidationDebug(issues) {
-  const body = $("#delta-body");
-  if (!body || !issues?.length) return;
+  if (debug.prose_issues?.length) {
+    sections.push(`
+      <div class="delta-section delta-prose-debug">
+        <div class="delta-section-label">Prose checks</div>
+        ${debug.prose_issues.map((issue) => `<div class="delta-prose-issue">${esc(issue)}</div>`).join("")}
+      </div>`);
+  }
 
-  const block = `
-    <div class="delta-section delta-prose-debug">
-      <div class="delta-section-label">Prose checks</div>
-      ${issues.map((issue) => `<div class="delta-prose-issue">${esc(issue)}</div>`).join("")}
-    </div>`;
+  if (debug.memory_debug) {
+    const memory = debug.memory_debug;
+    const used = memory.tokens_used || {};
+    const cap = memory.tokens_cap || {};
+    const evictions = memory.evictions || [];
+    const rows = Object.keys(cap).map(
+      (k) => `<div class="delta-prose-issue">${esc(k)}: ${used[k] || 0} / ${cap[k] || "?"} tokens</div>`,
+    );
+    sections.push(`
+      <div class="delta-section delta-prose-debug">
+        <div class="delta-section-label">Memory budget</div>
+        ${rows.join("")}
+        ${evictions.length ? `<div class="delta-section-label">Evictions</div>${evictions.map((e) => `<div class="delta-prose-issue">${esc(e)}</div>`).join("")}` : ""}
+      </div>`);
+  }
 
+  if (!sections.length) return;
+
+  const block = sections.join("");
   const empty = body.querySelector(".delta-empty");
   if (empty) {
     body.innerHTML = block;
@@ -326,6 +338,9 @@ function renderStatusBar() {
   if (staminaBar) staminaBar.style.width = `${h.stamina?.pct ?? 0}%`;
   if (staminaVal) staminaVal.textContent = `${h.stamina?.current ?? 0}/${h.stamina?.max ?? 0}`;
   if (wealthEl) wealthEl.textContent = `${h.wealth ?? 0}c`;
+
+  const debugEl = $("#hdr-debug");
+  if (debugEl) debugEl.classList.toggle("hidden", !state?.session?.debug_enabled);
 }
 
 /* ── Sidebar ── */
@@ -365,6 +380,29 @@ function renderSidebar() {
   setOptionalText(hintEl, p.goal_hint || "");
   if (weatherEl) weatherEl.textContent = w.weather || "—";
   if (moodEl) moodEl.textContent = w.district_mood || "—";
+
+  const inv = state.investigation;
+  const invSection = $("#sb-investigation");
+  if (invSection) {
+    if (inv?.active) {
+      invSection.classList.remove("hidden");
+      const titleEl = $("#sb-inv-title");
+      const stageEl = $("#sb-inv-stage");
+      const cluesEl = $("#sb-inv-clues");
+      if (titleEl) titleEl.textContent = inv.title || "Mystery";
+      if (stageEl) {
+        stageEl.textContent = `Stage ${inv.stage}/${inv.stage_total} — ${inv.stage_label || ""}`;
+      }
+      if (cluesEl) {
+        const clues = inv.clues || [];
+        cluesEl.innerHTML = clues.length
+          ? clues.map((c) => `<li>${esc(c.text)}</li>`).join("")
+          : `<li class="inv-empty">No clues yet — investigate the scene.</li>`;
+      }
+    } else {
+      invSection.classList.add("hidden");
+    }
+  }
 
   setBadge($("#badge-inv"), invCount);
   setBadge($("#badge-bonds"), bondCount);
@@ -966,11 +1004,8 @@ function applyResult(result) {
   if (result?.turn) {
     renderDeltaPanel(result.turn);
   }
-  if (result?.debug?.prose_issues?.length) {
-    renderProseValidationDebug(result.debug.prose_issues);
-  }
-  if (result?.debug?.memory_debug) {
-    renderMemoryDebug(result.debug.memory_debug);
+  if (result?.debug) {
+    renderTurnDebug(result.debug);
   }
   if (result?.state) {
     state = result.state;

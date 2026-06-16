@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>AIStory</title>
-  <link rel="stylesheet" href="/ui/styles.css?v=14" />
+  <link rel="stylesheet" href="/ui/styles.css?v=15" />
 </head>
 <body>
   <div id="boot" class="boot">
@@ -68,6 +68,7 @@
         <span class="val" id="hdr-stamina-val">—</span>
       </span>
       <span class="wealth-tag" id="hdr-wealth">—</span>
+      <span class="debug-tag hidden" id="hdr-debug" title="Debug mode (AISTORY_DEBUG=1)">DEBUG</span>
     </header>
 
     <div class="main-grid">
@@ -79,6 +80,12 @@
           <p class="char-motivation hidden" id="sb-motivation"></p>
           <ul class="sb-goals hidden" id="sb-goals"></ul>
           <p class="goal-hint hidden" id="sb-hint"></p>
+        </div>
+        <div class="sb-section sb-investigation hidden" id="sb-investigation">
+          <div class="sb-label">Investigation</div>
+          <div class="inv-title" id="sb-inv-title">—</div>
+          <div class="inv-stage" id="sb-inv-stage">—</div>
+          <ul class="inv-clues" id="sb-inv-clues"></ul>
         </div>
         <div class="sb-section">
           <div class="sb-label">Sheets</div>
@@ -151,6 +158,6 @@
     <div class="modal-body" id="modal-body"></div>
   </div>
 
-  <script src="/ui/app.js?v=14"></script>
+  <script src="/ui/app.js?v=15"></script>
 </body>
 </html>
