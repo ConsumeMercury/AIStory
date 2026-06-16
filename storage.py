@@ -13,8 +13,10 @@ simulation/, ...). It is on sys.path because src/main.py inserts it.
 
 import json
 import os
+import sys
 import tempfile
 import threading
+import time
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -93,22 +95,35 @@ def _disk_save(relpath, data):
     path = full_path(relpath)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     directory = os.path.dirname(path)
-    fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+    attempts = 8 if sys.platform == "win32" else 1
+    last_err = None
+    for attempt in range(attempts):
+        fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
         try:
-            os.replace(tmp, path)
-        except OSError:
-            if os.path.exists(path):
-                os.remove(path)
-            os.replace(tmp, path)
-    except Exception:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
-        raise
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            try:
+                os.replace(tmp, path)
+                return
+            except OSError as err:
+                last_err = err
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                winerr = getattr(err, "winerror", None)
+                if attempt < attempts - 1 and winerr in (5, 32):
+                    time.sleep(0.05 * (attempt + 1))
+                    continue
+                raise
+        except Exception:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
+    if last_err:
+        raise last_err
 
 
 def load(relpath, default=None):

@@ -24,7 +24,7 @@ from simulation.scene_coherence import (
     place_label,
     DIALOGUE_KINDS,
 )
-from simulation.local_places import resolve_local_movement
+from simulation.local_places import resolve_local_movement, record_narrator_places
 from simulation.generation_guardrails import build_hard_constraints_block
 from simulation.prose_validator import log_scene_prose_issues
 from simulation.npc_continuity import ensure_npc_continuity_locks
@@ -438,12 +438,14 @@ def process_player_action(action, *, on_prose_chunk=None):
         else:
             action_ctx["approach_failed"] = True
             fail_msg = local_msg or (
-                "That specific place is not reachable from where you stand. "
-                "Name a door, office, or corner that fits this district."
+                "That place isn't reachable from here on foot — stay in the district. "
+                "Describe the failed attempt without inventing barred gates."
             )
             action_ctx["story_directive"] = (
                 action_ctx.get("story_directive", "")
-                + " APPROACH FAILED — no movement. Do NOT invent interiors or loot."
+                + " APPROACH FAILED — no movement. Protagonist stays put. "
+                "Do NOT describe iron gates blocking a place named in prior beats. "
+                "Do NOT repeat the focal NPC's last line — react to the stall or go quiet."
             ).strip()
             extra_directive = fail_msg
 
@@ -865,6 +867,9 @@ def process_player_action(action, *, on_prose_chunk=None):
                 player_speech=action_ctx.get("player_speech"),
             ):
                 save(PLAYER_FILE, player)
+        if scene:
+            if record_narrator_places(player, scene, player.get("area")):
+                save(PLAYER_FILE, player)
         if kind == "investigate":
             focus_npc = None
         else:
@@ -883,6 +888,8 @@ def process_player_action(action, *, on_prose_chunk=None):
             "place": journal_place,
             "subplace": (player.get("scene_subplace") or {}).get("id"),
             "focus_npc": focus_npc,
+            "approach_failed": bool(action_ctx.get("approach_failed")),
+            "travel_failed": bool(action_ctx.get("travel_failed")),
             "combat_fatal": action_ctx.get("combat_fatal") if kind == "attack" else player.get("last_combat_fatal"),
         })
         maybe_compact_journal(player, npcs)

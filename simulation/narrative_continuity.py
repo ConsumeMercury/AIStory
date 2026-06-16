@@ -136,8 +136,37 @@ def build_no_reestablishment_note(player, journal, focal_npc_id, known_ids, area
     return "CONTINUITY — NO RE-ESTABLISHMENT:\n" + "\n".join(f"- {ln}" for ln in lines)
 
 
+def build_stalled_beat_note(player, journal, action_context, focal_npc_id, area_id):
+    """When movement fails repeatedly at the same spot, forbid line recycling."""
+    if not journal:
+        return ""
+    last = journal[-1]
+    ctx = action_context or {}
+    same_place = last.get("area") == area_id
+    same_focus = focal_npc_id and last.get("focus_npc") == focal_npc_id
+    stalled = ctx.get("approach_failed") or ctx.get("travel_failed")
+    last_stalled = last.get("approach_failed") or last.get("travel_failed")
+
+    if not same_place or not stalled:
+        return ""
+    if not (same_focus or last_stalled):
+        return ""
+
+    prior = (last.get("excerpt") or "")[:160]
+    lines = [
+        "STALLED BEAT — the protagonist did not move; state is unchanged from last beat.",
+        "Do NOT repeat the focal NPC's prior line verbatim.",
+        "React to the stall: impatience, silence, a new concrete detail, or let them go quiet.",
+        "Do NOT name new navigable destinations the player cannot reach.",
+    ]
+    if prior:
+        lines.append(f"Last beat (do not replay): {prior}")
+    return "CONTINUITY — STALL:\n" + "\n".join(f"- {ln}" for ln in lines)
+
+
 def build_narrative_continuity_block(
     player, journal, focal_npc_id, npcs, *, known_ids, area_id, action_kind,
+    action_context=None,
 ):
     """Voice anchors, established invented details, and anti-reestablishment."""
     _seed_cache_from_journal(player, focal_npc_id, npcs, journal)
@@ -145,6 +174,12 @@ def build_narrative_continuity_block(
     parts = [build_no_reestablishment_note(
         player, journal, focal_npc_id, known_ids, area_id, action_kind,
     )]
+
+    stall = build_stalled_beat_note(
+        player, journal, action_context, focal_npc_id, area_id,
+    )
+    if stall:
+        parts.append(stall)
 
     if focal_npc_id:
         rec = (player.get("known_npcs") or {}).get(focal_npc_id, {})

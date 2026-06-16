@@ -26,6 +26,7 @@ FORBIDDEN:
 - Changing an NPC's gender or pronouns from the FOCAL PERSON block (use ONLY the pronouns given).
 - Putting words in the protagonist's mouth unless THIS BEAT includes their exact quoted line.
 - Teleporting the protagonist to a different building or district than LOCATION LOCK specifies.
+- Naming specific navigable destinations (stable-yard, cistern, named building) the player could try to reach — unless NAVIGABLE PLACES or SCENE FACTS list them. Use vague direction instead.
 - Inventing documents, ledger pages, keys, or loot not listed in SCENE FACTS or inventory facts.
 - Giving named dialogue to background crowd when the cast note says NO FOCAL CHARACTER.
 - Swapping which person speaks when the player named a role (priest, clerk, guard) or a known name.
@@ -109,8 +110,9 @@ CRAFT_BY_KIND = {
     ),
     "approach": (
         "BEAT TYPE — LOCAL MOVEMENT:\n"
-        "A few steps within the same district — door, office, corner. "
-        "Obey LOCATION LOCK. No hours-long travel. No new named speakers unless in SCENE FACTS."
+        "A few steps within the same district — door, office, yard, corner. "
+        "Obey LOCATION LOCK. No hours-long travel. "
+        "Do NOT name new go-to places the player might try to reach later."
     ),
     "investigate": (
         "BEAT TYPE — INVESTIGATION:\n"

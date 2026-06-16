@@ -216,6 +216,9 @@ def short_descriptor(npc):
 def appearance_notes(npc, focus="full"):
     """Compact appearance strings for narrator rotation."""
     p = npc.get("physique", {})
+    lock = p.get("appearance_lock")
+    if lock and focus in ("full", "face"):
+        return lock
     if focus == "posture":
         return f"{p.get('posture', '')}; {p.get('gait', '')}"
     if focus == "face":

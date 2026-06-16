@@ -184,10 +184,15 @@ def ensure_world_data():
     institutions = build_institutions(
         npcs, areas, locations["cities"], institution_plan=institution_plan,
     )
-    attach_area_storylines(areas, institutions, npcs)
     attach_schedules(npcs, areas)
     attach_secrets(npcs, factions, institutions)
     attach_personal_objectives(npcs)
+
+    from generation.ai_worldgen import enrich_world_narrative
+    enrich_world_narrative(world, locations, areas, institutions, npcs, factions)
+    save("world/world_state.json", world)
+
+    attach_area_storylines(areas, institutions, npcs)
     institutions = attach_politics(institutions, npcs)
     seed_drama(npcs)
 

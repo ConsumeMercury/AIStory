@@ -196,6 +196,22 @@ def test_storyline_catalog():
             assert entry.get("theme")
 
 
+def test_llm_content_validators():
+    from generation.llm_content import (
+        ai_worldgen_enabled,
+        validate_storyline_spec,
+    )
+
+    assert ai_worldgen_enabled() is False
+    ok, cleaned, _ = validate_storyline_spec({
+        "title": "Test Arc",
+        "theme": "intrigue",
+        "hooks": ["A merchant whispers about fixed scales."],
+        "stages": ["rumour", "accusation", "bribe", "witness", "reckoning"],
+    })
+    assert ok and cleaned["title"] == "Test Arc"
+
+
 def test_bootstrap_import():
     import src.main as main_mod
     assert hasattr(main_mod, "bootstrap_world")
@@ -262,6 +278,7 @@ def main():
         ("meta_commands", test_meta_commands),
         ("starting_placement", test_starting_placement),
         ("storyline_catalog", test_storyline_catalog),
+        ("llm_content_validators", test_llm_content_validators),
         ("investigation_flow", test_investigation_flow),
         ("story_loop_offline", test_story_loop_offline),
         ("generation_report_offline", test_generation_report_offline),

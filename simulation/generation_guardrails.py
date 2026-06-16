@@ -9,6 +9,7 @@ GUARDRAIL_RULES = (
     "FOCUS: Only the focal person in SCENE FACTS may speak with named dialogue.",
     "ABSENCE: If someone is absent, show empty result — no invented dialogue from them.",
     "LOCATION: Obey LOCATION LOCK — no teleporting to new buildings or districts.",
+    "PLACES: Do not name specific go-to destinations (yards, cisterns, buildings) unless NAVIGABLE PLACES lists them.",
     "MOVEMENT: travel_failed or approach_failed means NO movement occurred.",
     "LOOT: Items and documents only if SCENE FACTS or inventory facts list them.",
     "CAST: NO FOCAL CHARACTER means no new named strangers with speeches.",
@@ -41,7 +42,9 @@ def build_hard_constraints_block(focal_npc_id, focal_npc, scene_place, action_co
         )
     if ctx.get("travel_failed") or ctx.get("approach_failed"):
         lines.append(
-            "- NO MOVEMENT occurred this beat. Do NOT describe entering new rooms or traveling."
+            "- NO MOVEMENT occurred this beat. Do NOT describe entering new rooms or traveling. "
+            "Do NOT invent barred gates to a place named in prior narration. "
+            "Do NOT repeat the focal NPC's last line — react to the stall or stay silent."
         )
     if focal_npc_id and focal_npc:
         known_name = focal_npc.get("name")

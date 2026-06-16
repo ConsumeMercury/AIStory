@@ -104,6 +104,63 @@ def test_investigate_is_environment_only_even_with_role_hint():
     assert "Environment-only" in note
 
 
+def test_promoted_place_from_prior_narration():
+    player = {
+        "area": "ashmoor:high_quarter",
+        "story_flags": {},
+        "journal": [{
+            "area": "ashmoor:high_quarter",
+            "scene": (
+                'Ashby nodded toward the shadows. "The captain waits at the cistern," he said.'
+            ),
+        }],
+    }
+    sub, msg = resolve_local_movement(
+        "Go to the cistern",
+        player,
+        "ashmoor:high_quarter",
+    )
+    assert sub is not None
+    assert "cistern" in sub["label"].lower()
+    assert player.get("scene_subplace", {}).get("id")
+    assert "LOCAL MOVEMENT" in msg
+
+
+def test_record_narrator_places_from_scene():
+    from simulation.local_places import record_narrator_places
+
+    player = {"narrator_places": {}}
+    scene = "The captain waits at the cistern while horns blow."
+    assert record_narrator_places(player, scene, "city:high_quarter") is True
+    stored = player["narrator_places"]["city:high_quarter"]
+    assert any("cistern" in rec["label"].lower() for rec in stored.values())
+
+
+def test_follow_noise_is_approach():
+    ctx = interpret_action("follow the noise", {"area": "x"}, [], {})
+    assert ctx["kind"] == "approach"
+
+
+def test_stalled_beat_note_on_repeated_failure():
+    from simulation.narrative_continuity import build_stalled_beat_note
+
+    journal = [{
+        "area": "a1",
+        "focus_npc": "n1",
+        "excerpt": "The boy wants a stripe.",
+        "approach_failed": True,
+    }]
+    note = build_stalled_beat_note(
+        {},
+        journal,
+        {"approach_failed": True},
+        "n1",
+        "a1",
+    )
+    assert "STALLED BEAT" in note
+    assert "do not replay" in note.lower() or "Do NOT repeat" in note
+
+
 def test_looks_like_local_movement():
     assert looks_like_local_movement("go to the oak door")
     assert not looks_like_local_movement("go to the market district")

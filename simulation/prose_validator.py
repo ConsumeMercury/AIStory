@@ -185,11 +185,14 @@ def wrong_speaker_dialogue(text, focal_npc_id, present_npcs, npcs, known_ids=Non
         return None
     present_ids = {n.get("id") for n in (present_npcs or [])}
     known_ids = set(known_ids or [])
+    focal_name = ((npcs or {}).get(focal_npc_id, {}).get("name") or "").strip().lower()
     for nid, npc in (npcs or {}).items():
         if nid == focal_npc_id:
             continue
         name = (npc.get("name") or "").strip()
         if not name or len(name) < 3:
+            continue
+        if focal_name and name.lower() == focal_name:
             continue
         if nid not in present_ids:
             scope = "absent"

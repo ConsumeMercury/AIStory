@@ -28,6 +28,7 @@ from simulation.novel_craft import (
     temperature_for_kind, frequency_penalty_for_kind,
 )
 from simulation.narrative_continuity import build_narrative_continuity_block
+from simulation.local_places import build_known_places_block, build_place_lock
 from simulation.generation_guardrails import guardrails_prompt_block, build_hard_constraints_block
 from simulation.gemini_client import generate_text, generate_text_stream
 from simulation.memory_context import build_memory_context
@@ -291,6 +292,7 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
     narrative_block = build_narrative_continuity_block(
         player, journal, focal_npc_id, npcs_all,
         known_ids=known_ids, area_id=aid, action_kind=kind,
+        action_context=action_context,
     )
     mode_block = scene_mode_rules(kind, has_journal)
     length_block = scene_length_hint(kind, opening=not has_journal and kind == "explore")
@@ -341,6 +343,8 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
     hard_block = hard_constraints or build_hard_constraints_block(
         focal_npc_id, focal_npc, place, action_context,
     )
+    known_places_block = build_known_places_block(player, aid)
+    place_lock_block = build_place_lock(player, area, action_context)
 
     prompt = _join_prompt_sections(
         CRAFT_CORE,
@@ -351,6 +355,8 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
         narrative_block,
         memory_block,
         ledger_block,
+        known_places_block,
+        place_lock_block,
         scene_facts,
         f"SCENE:\nSetting: {setting}. Place: {place}.",
         arc,

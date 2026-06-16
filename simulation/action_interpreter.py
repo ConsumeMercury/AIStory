@@ -20,6 +20,7 @@ _PATTERNS = [
     (re.compile(r"^\s*ask\s+[A-Za-z][A-Za-z'-]{1,28}\s+about\s+", re.I), "ask_about"),
     (re.compile(r"\b(stake out|wait for|watch for|keep watch)\b", re.I), "wait"),
     (re.compile(r"\b(hunt|track|stalk|trail|follow tracks|follow the trail)\b", re.I), "hunt"),
+    (re.compile(r"\bfollow\s+(?:the\s+)?(?:noise|sound|them|him|her)\b", re.I), "approach"),
     (re.compile(r"\b(ask for work|looking for work|need work|any work|hire me|find work)\b", re.I), "guild"),
     (re.compile(r"\b(guild contract|join the guild|guild work|take the contract|bounty board)\b", re.I), "guild"),
     (re.compile(r"\b(pressure|lean on|push him|push her|demand)\b", re.I), "threaten"),

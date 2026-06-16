@@ -2,18 +2,24 @@
 Semantic memory — embedding cache and similarity search (Gemini, optional).
 """
 
+import json
 import logging
 import math
 import os
+import sys
+import time
 
 log = logging.getLogger(__name__)
 
-EMBED_MODEL = os.environ.get("GEMINI_EMBED_MODEL", "text-embedding-004")
+EMBED_MODEL = os.environ.get("GEMINI_EMBED_MODEL", "gemini-embedding-001")
 MAX_VECTORS = 120
 EMBED_DIM_HINT = 768
+_embed_disabled_reason = None
 
 
 def semantic_memory_enabled():
+    if _embed_disabled_reason:
+        return False
     if os.environ.get("AISTORY_SKIP_SEMANTIC_MEMORY", "").lower() in ("1", "true", "yes"):
         return False
     from simulation.gemini_client import api_key
@@ -40,16 +46,22 @@ def cosine_similarity(a, b):
 
 def embed_text(text):
     """Return embedding vector or None if unavailable."""
+    global _embed_disabled_reason
     if not text or not semantic_memory_enabled():
         return None
     try:
         from google import genai
+        from google.genai import types
         from simulation.gemini_client import require_api_key
 
         client = genai.Client(api_key=require_api_key())
         result = client.models.embed_content(
             model=EMBED_MODEL,
             contents=str(text)[:8000],
+            config=types.EmbedContentConfig(
+                output_dimensionality=EMBED_DIM_HINT,
+                task_type="RETRIEVAL_DOCUMENT",
+            ),
         )
         emb = result.embeddings
         if emb:
@@ -60,7 +72,16 @@ def embed_text(text):
         if hasattr(result, "embedding") and result.embedding:
             return list(result.embedding.values)
     except Exception as e:
-        log.warning("Embedding failed: %s", e)
+        msg = str(e)
+        if "404" in msg or "NOT_FOUND" in msg:
+            _embed_disabled_reason = msg
+            log.warning(
+                "Semantic memory disabled for this session (embedding model %s): %s",
+                EMBED_MODEL,
+                msg,
+            )
+        else:
+            log.warning("Embedding failed: %s", e)
     return None
 
 

@@ -6,6 +6,7 @@ import random
 
 from generation.district_storylines import DISTRICT_STORYLINE_POOLS
 from generation.institution_arcs import INSTITUTION_HOOKS
+from generation.ai_worldgen import maybe_enrich_storyline_spec
 
 # Which institution types fit which district suffix
 INSTITUTION_DISTRICT = {
@@ -101,6 +102,12 @@ def attach_area_storylines(areas, institutions, npcs):
             _mark_key_npcs(npcs, key_npcs, inst)
         else:
             spec = pick_district_storyline(dkey)
+            spec = maybe_enrich_storyline_spec(
+                spec,
+                district_name=dkey,
+                city_name=area.get("city", ""),
+                area_name=area.get("name", dkey),
+            )
             hook = random.choice(spec["hooks"])
             stages = list(spec["stages"])
             area["storyline"] = {

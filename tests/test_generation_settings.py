@@ -76,6 +76,8 @@ def test_update_npc_narrative_cache_stores_lines_and_details():
 
 
 def test_narrative_block_includes_no_reestablishment():
+    from simulation.narrative_continuity import build_narrative_continuity_block
+
     player = {
         "discovered_areas": {"ashmoor:market": {"visits": 3}},
         "known_npcs": {"f1": {"name_known": True, "prior_lines": ['"Flat and measured."']}},
