@@ -60,6 +60,8 @@ _DESC_HINTS = (
     (re.compile(r"\b(priest|cleric|monk|clerk|clerics)\b", re.I), lambda n: n.get("role") == "priest"),
     (re.compile(r"\b(merchant|trader)\b", re.I), lambda n: n.get("role") in ("merchant", "innkeeper")),
     (re.compile(r"\b(hunter|hunters)\b", re.I), lambda n: n.get("role") == "hunter"),
+    (re.compile(r"\b(scholar|scholars)\b", re.I), lambda n: n.get("role") == "scholar"),
+    (re.compile(r"\b(scribe|scribes)\b", re.I), lambda n: n.get("role") == "scribe"),
     (re.compile(r"\b(herbalist|herbalists)\b", re.I), lambda n: n.get("role") in ("herbalist", "priest", "merchant")),
     (re.compile(r"\b(woman|lady|girl)\b", re.I), lambda n: n.get("gender") == "female"),
     (re.compile(r"\b(man|fellow|bloke)\b", re.I), lambda n: n.get("gender") == "male"),
@@ -71,7 +73,7 @@ def _hair_match(npc, colors):
     return any(c in hair for c in colors)
 
 
-def match_npc_by_description(action, present):
+def match_npc_by_description(action, present, player=None):
     """Match present NPCs by role/appearance hints in player text."""
     if not action or not present:
         return None
@@ -91,6 +93,9 @@ def match_npc_by_description(action, present):
         if len(top_ids) == 1:
             top_id = top_ids[0]
             return next(n for n in present if n["id"] == top_id)
+        focus = player.get("scene_focus") if player else None
+        if focus and focus in top_ids:
+            return next(n for n in present if n["id"] == focus)
         return None
     m = _FIND_PERSON.match(action.strip())
     if m:

@@ -464,10 +464,16 @@ def process_player_action(action, *, on_prose_chunk=None):
 
     forced_kind = None
     forced_target_id = None
+    pending_clarification = player.get("pending_target_clarification")
     clarified_kind, clarified_id = resolve_clarification_pick(action, player, present, npcs)
+    replay_action = action
     if clarified_id:
         forced_kind = clarified_kind
         forced_target_id = clarified_id
+        original = (pending_clarification or {}).get("original_action")
+        if original:
+            replay_action = original
+        player["scene_focus"] = clarified_id
         clear_pending_clarification(player)
         with state_lock():
             save(PLAYER_FILE, player)
@@ -482,7 +488,7 @@ def process_player_action(action, *, on_prose_chunk=None):
                 save(PLAYER_FILE, player)
                 save(NPC_FILE, npcs)
 
-    action_ctx = interpret_action(action, player, present, world, npcs=npcs)
+    action_ctx = interpret_action(replay_action, player, present, world, npcs=npcs)
     kind = action_ctx["kind"]
     if forced_kind:
         action_ctx["kind"] = forced_kind
@@ -490,6 +496,11 @@ def process_player_action(action, *, on_prose_chunk=None):
     if forced_target_id:
         action_ctx["target_id"] = forced_target_id
         action_ctx["clarification_resolved"] = True
+        action_ctx["story_directive"] = (
+            action_ctx.get("story_directive", "")
+            + " CLARIFICATION RESOLVED — answer the protagonist's question now; "
+            "do NOT repeat your prior speech verbatim."
+        ).strip()
 
     with state_lock():
         world = load(WORLD_FILE, {})

@@ -130,6 +130,32 @@ def test_schedule_tag_two_part_form():
     assert "morning crews" in tags[0]["label"].lower()
 
 
+def test_coal_chute_promise_records_and_matches_wait():
+    player = {"scheduled_events": {}}
+    world = {"hour_count": 10, "hour": 10}
+    scene = (
+        'He whispers that the junior boys go in through the back by the coal-chutes '
+        "before the bells even ring."
+    )
+    assert record_scheduled_events(player, scene, "city:high_quarter", world)
+    event = parse_wait_for_event(
+        "Wait for the junior boys to enter through the coal-chutes",
+        player,
+        "city:high_quarter",
+    )
+    assert event
+    assert "chute" in event["label"].lower()
+    result = resolve_wait_advance(
+        "Wait for the junior boys to enter through the coal-chutes",
+        world,
+        player,
+        "city:high_quarter",
+    )
+    assert not result["refused"]
+    assert result["hours"] == 2
+    assert result.get("event")
+
+
 def test_wait_until_dawn_updates_time_of_day():
     from simulation.world_clock import advance_clock, _recompute
 

@@ -136,6 +136,13 @@ def action_mentions_role_or_descriptor(action, present=None):
     return bool(re.search(r"\bred[\s-]?hair|\bgrey[\s-]?hair|\bauburn\b", action, re.I))
 
 
+def _role_matching_npcs(action, present):
+    """All present NPCs whose role fits a hint in the action text."""
+    if not action or not present:
+        return []
+    return [n for n in present if npc_matches_action_role_hint(action, n)]
+
+
 def resolve_action_target(action, player, present, npcs=None, kind="general"):
     """
     Return the present NPC the player is targeting, or None.
@@ -161,7 +168,23 @@ def resolve_action_target(action, player, present, npcs=None, kind="general"):
     if sticky:
         return sticky
 
-    role_match = match_npc_by_description(action, present)
+    role_matches = _role_matching_npcs(action, present)
+    if len(role_matches) == 1:
+        return role_matches[0]
+    if len(role_matches) > 1:
+        focus_id = player.get("scene_focus")
+        for n in role_matches:
+            if n["id"] == focus_id:
+                return n
+        journal = player.get("journal") or []
+        if journal:
+            last_focus = journal[-1].get("focus_npc")
+            for n in role_matches:
+                if n["id"] == last_focus:
+                    return n
+        return None
+
+    role_match = match_npc_by_description(action, present, player=player)
     if role_match:
         return role_match
 

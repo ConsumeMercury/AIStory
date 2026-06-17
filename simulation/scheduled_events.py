@@ -28,6 +28,14 @@ _EVENT_PROMISES = (
      "first_toll", 1, "the first toll"),
     (re.compile(r"\b(?:auction|buyers?|bid)\b.*\b(?:third|3rd)\s+(?:toll|bell)\b", re.I),
      "third_toll_auction", 3, "the third toll (underground bid)"),
+    (re.compile(r"\btide[\s-]?bell\b.*\b(?:twice|two|2)\b", re.I),
+     "tide_bell_twice", 2, "the tide-bell rings twice"),
+    (re.compile(r"\b(?:rings|ring)\s+(?:twice|two\s+times)\b.*\btide[\s-]?bell\b", re.I),
+     "tide_bell_twice", 2, "the tide-bell rings twice"),
+    (re.compile(r"\bcoal[\s-]?chutes?\b", re.I),
+     "coal_chute_entry", 2, "the junior boys enter through the coal-chutes"),
+    (re.compile(r"\b(?:junior\s+)?boys?\b.*\b(?:chute|coal)\b", re.I),
+     "coal_chute_entry", 2, "the junior boys enter through the coal-chutes"),
 )
 
 _WAIT_FOR_EVENT = re.compile(
@@ -172,6 +180,10 @@ def _event_query_match(query, event):
     if "first toll" in query and "first" in eid:
         return True
     if "tide" in query and "bell" in query and "tide" in label and "bell" in label:
+        return True
+    if ("chute" in query or "coal" in query) and ("chute" in label or "coal" in label):
+        return True
+    if "boys" in query and "boys" in label:
         return True
     return False
 

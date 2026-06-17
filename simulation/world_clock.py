@@ -149,7 +149,7 @@ def resolve_wait_advance(action, world, player=None, area_id=None):
             result["event"] = event
             result["target_label"] = event.get("label")
             return result
-        if re.search(r"\b(?:toll|bell|auction|buyers?|bid)\b", action, re.I):
+        if re.search(r"\b(?:toll|bell|auction|buyers?|bid|chute|coal)\b", action, re.I):
             result["refused"] = True
             result["hours"] = 0
             result["refusal_message"] = (

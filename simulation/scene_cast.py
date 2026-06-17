@@ -86,6 +86,38 @@ def _score_npc(npc, player, action_ctx, known, institutions=None):
     return score
 
 
+CONTINUATION_KINDS = frozenset({
+    "wait", "talk", "ask_about", "ask_name", "personal_talk", "help", "give",
+    "threaten", "insult", "show_respect", "accuse", "blackmail", "confess",
+})
+
+
+def _continuation_focal_npc(present, player, action_ctx):
+    """Keep the same conversation partner when the action does not retarget."""
+    if action_ctx.get("target_id") or action_ctx.get("target_ambiguous"):
+        return None
+    kind = action_ctx.get("kind", "general")
+    if kind not in CONTINUATION_KINDS:
+        return None
+    present_ids = {n["id"] for n in present}
+    focus_id = player.get("scene_focus")
+    journal = player.get("journal") or []
+    if not focus_id and journal:
+        focus_id = journal[-1].get("focus_npc")
+    if not focus_id or focus_id not in present_ids:
+        return None
+    npc = next(n for n in present if n["id"] == focus_id)
+    action_text = action_ctx.get("action_summary") or ""
+    from simulation.target_resolution import (
+        action_mentions_role_or_descriptor,
+        npc_matches_action_role_hint,
+    )
+    if action_mentions_role_or_descriptor(action_text, present=present):
+        if not npc_matches_action_role_hint(action_text, npc):
+            return None
+    return npc
+
+
 def select_scene_cast(present, player, action_ctx, max_focus=1):
     """
     Returns (focus_list, crowd_note, focal_id).
@@ -208,6 +240,19 @@ def select_scene_cast(present, player, action_ctx, max_focus=1):
             f"Do NOT introduce or describe individual strangers. "
             f"There are people in the distance — indistinct, unnamed, unimportant."
         ), None
+
+    continued = _continuation_focal_npc(present, player, action_ctx)
+    if continued:
+        action_ctx["target_id"] = continued["id"]
+        others = len(present) - 1
+        crowd = (
+            f"{others} other people are nearby as background only — "
+            f"do NOT describe them, name them, or give them gestures or dialogue. "
+            f"They are faceless crowd noise."
+            if others > 0 else
+            "No other individuals worth distinguishing this scene."
+        )
+        return [continued], crowd, continued["id"]
 
     ranked = sorted(present, key=lambda n: _score_npc(n, player, action_ctx, known, institutions), reverse=True)
     focus = ranked[:max_focus]

@@ -118,19 +118,26 @@ def _second_person_question(rest):
     return q
 
 
-def _clause_has_unresolved_subject(rest):
-    """True when a wh-clause still carries third-person subject pronouns."""
+def _clause_has_unresolved_subject(rest, *, wh=None):
+    """True when a wh-clause is not a clean second-person question."""
     text = (rest or "").strip()
     if re.match(r"^(she|he|they)\b", text, re.I):
         return True
-    return bool(re.search(r"\b(she|he|they)\s+\w", text, re.I))
+    if re.search(r"\b(she|he|they)\s+\w", text, re.I):
+        return True
+    # Noun-phrase subjects break what/why reconstruction ("what the boy found").
+    if wh in ("what", "why", None):
+        if re.match(r"^(the|a|an|this|that|next|last|each|every)\s+\w", text, re.I):
+            if not re.search(r"\byou\b", text, re.I):
+                return True
+    return False
 
 
 def _format_wh_question(wh, rest):
     """Build a second-person question from wh-word + rewritten tail."""
     rest = _second_person_question(rest)
-    if wh in ("why", "how", "where", "when", "who", "if", "whether"):
-        if _clause_has_unresolved_subject(rest):
+    if wh in ("why", "what", "how", "where", "when", "who", "if", "whether"):
+        if _clause_has_unresolved_subject(rest, wh=wh):
             return None
     if wh == "why":
         if not re.match(r"^(did|do|were|was|have|has)\b", rest, re.I):

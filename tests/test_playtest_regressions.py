@@ -195,6 +195,34 @@ def test_mangled_when_fragment_reconstructs_not_echoes():
     assert "shipment comes through?" != speech
 
 
+def test_ask_what_noun_phrase_subject_produces_no_speech():
+    action = "ask the scholar what the boy found"
+    assert speech_for_ask_about(action) is None
+    ctx = interpret_action(
+        action,
+        {"scene_focus": "s1", "known_npcs": {}},
+        [_npc("s1", role="scholar"), _npc("s2", role="scholar", name="Other")],
+        {},
+    )
+    assert ctx["kind"] == "ask_about"
+    assert ctx.get("player_speech") is None
+
+
+def test_two_scholars_prefer_scene_focus():
+    from simulation.target_resolution import resolve_action_target
+
+    nedkin = _npc("n1", role="scholar", gender="male", name="Nedkin")
+    zaim = _npc("z1", role="scholar", gender="female", name="Zaim")
+    player = {"scene_focus": "n1", "known_npcs": {}, "journal": [{"focus_npc": "n1"}]}
+    target = resolve_action_target(
+        "Ask the scholar about the archives",
+        player,
+        [nedkin, zaim],
+        kind="ask_about",
+    )
+    assert target["id"] == "n1"
+
+
 def test_misname_directive_flags_wrong_name():
     from simulation.generation_guardrails import build_misname_directive
 

@@ -74,3 +74,42 @@ def test_collect_description_matches_two_guards():
     present = _two_guards()
     hits = collect_description_matches("find the guard", present)
     assert len(hits) == 2
+
+
+def test_pending_clarification_stores_original_action():
+    present = [
+        {"id": "a", "status": "alive", "gender": "female", "name": "Zaim Suleima", "role": "scholar", "appearance": {}},
+        {"id": "b", "status": "alive", "gender": "female", "name": "Valena Karim", "role": "soldier", "appearance": {}},
+    ]
+    player = {"scene_focus": None, "known_npcs": {"a": {"name_known": True}, "b": {"name_known": True}}}
+    npcs = {n["id"]: n for n in present}
+    amb = detect_target_ambiguity(
+        "ask her if she is related to the dead master",
+        player,
+        present,
+        npcs,
+        "ask_about",
+    )
+    assert amb is not None
+    assert amb.get("original_action")
+
+
+def test_clarification_pick_by_full_name():
+    present = [
+        {"id": "a", "status": "alive", "gender": "female", "name": "Zaim Suleima", "role": "scholar", "appearance": {}},
+        {"id": "b", "status": "alive", "gender": "female", "name": "Valena Karim", "role": "soldier", "appearance": {}},
+    ]
+    player = {
+        "pending_target_clarification": {
+            "kind": "ask_about",
+            "original_action": "ask her if she is related to the dead master",
+            "options": [
+                {"id": "a", "label": "Zaim Suleima (scholar)", "chip": "ask Zaim"},
+                {"id": "b", "label": "Valena Karim (soldier)", "chip": "ask Valena"},
+            ],
+        },
+    }
+    npcs = {n["id"]: n for n in present}
+    kind, nid = resolve_clarification_pick("Zaim Suleima", player, present, npcs)
+    assert kind == "ask_about"
+    assert nid == "a"
