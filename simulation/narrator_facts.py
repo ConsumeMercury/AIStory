@@ -74,7 +74,7 @@ def build_fact_emission_block(scene_state=None):
         "STRUCTURED FACTS (simulation tags — stripped from player prose; declare alongside story):",
         "- Who speaks with named dialogue: [FACT: speaking | npc_id] per speaker in cast",
         "- If prose implies an NPC died who is alive in SCENE FACTS: [FACT: death | npc_id]",
-        "- If naming a specific go-to place (move target OR place named in NPC dialogue): "
+        "- If an NPC names a specific go-to place in quoted dialogue: "
         "[FACT: place | place_name]",
         "- Timed promises: [SCHEDULE: event_id | label | +Nh] (required for WHEN commitments)",
         "Use real cast ids from SCENE FACTS only — never invent ids in tags.",
@@ -141,30 +141,106 @@ def validate_narrator_facts(facts, player, npcs, scene_state, action_ctx, focal_
     return issues
 
 
-def dialogue_place_fact_gap(text, facts):
-    """Flag when prose names navigable places but no [FACT: place] tags were emitted."""
-    from simulation.local_places import extract_narrator_destinations
+_DIALOGUE_AT_PLACE = re.compile(
+    r"\b(?:meet(?:\s+me)?|go|find|wait|head|walk|come|sent|send(?:\s+\w+){0,3})\b"
+    r"(?:\s+\w+){0,5}\s+(?:at|in|to|by|behind|inside|down|into|near)\s+"
+    r"(?:the\s+)?(?P<place>[\w\s'-]{3,40}?)"
+    r"(?:\s+before|\s+when|\s+after|\s+if\b|[.,\"']|$)",
+    re.I,
+)
+_DIALOGUE_NAMED_PLACE = re.compile(
+    r"\b(?P<place>(?:the\s+)?(?:"
+    r"customs\s+house|back\s+room|cellars?|market(?:\s+square)?|"
+    r"gate(?:house)?|warehouse|sanctuary|chapel|temple|"
+    r"records?\s+office|clerk'?s?\s+office|"
+    r"inn|tavern|wharf|harbor|harbour|dock(?:s)?|"
+    r"[\w'-]+\s+(?:house|hall|yard|room|office|cellar|gate|court|tower|"
+    r"bridge|quarter|district|wharf|market|dock|cellars?)"
+    r"))\b",
+    re.I,
+)
+_PLACE_REJECT = re.compile(
+    r"\b(?:your|my|his|her|their|our|you|boots|collar|sleeve|grit|pavers|"
+    r"shoulder|hand|finger|voice|name|question|look|breadth|chest|wall from|"
+    r"stop a yard|wet grit)\b",
+    re.I,
+)
+_LOCATION_WORDS = frozenset({
+    "cellar", "cellars", "house", "hall", "room", "office", "gate", "market",
+    "wharf", "dock", "docks", "temple", "chapel", "inn", "tavern", "warehouse",
+    "quarter", "district", "yard", "bridge", "tower", "customs", "sanctuary",
+    "harbor", "harbour", "alley", "lane", "gatehouse", "cistern", "barracks",
+})
 
-    extracted = extract_narrator_destinations(text)
-    if not extracted:
+
+def _normalize_place_label(raw):
+    label = (raw or "").strip(" .,\"'")
+    label = re.sub(r"^(?:the|a|an)\s+", "", label, flags=re.I).strip()
+    return label
+
+
+def _valid_dialogue_place(name):
+    name = _normalize_place_label(name)
+    if len(name) < 4 or len(name) > 48:
+        return False
+    if _PLACE_REJECT.search(name):
+        return False
+    tokens = {t for t in re.split(r"[\W_]+", name.lower()) if t}
+    if not tokens & _LOCATION_WORDS:
+        return False
+    if re.search(r"\b(?:you|your|stop|yard from)\b", name, re.I):
+        return False
+    return True
+
+
+def extract_dialogue_place_names(text):
+    """Conservative: navigable place names explicitly spoken in quoted dialogue."""
+    if not text:
+        return []
+    found = []
+    seen = set()
+    for quote in re.findall(r'"([^"]{6,})"', text):
+        for pat in (_DIALOGUE_AT_PLACE, _DIALOGUE_NAMED_PLACE):
+            for m in pat.finditer(quote):
+                place = _normalize_place_label(m.group("place"))
+                key = place.lower()
+                if not _valid_dialogue_place(place) or key in seen:
+                    continue
+                seen.add(key)
+                found.append(place)
+    return found
+
+
+def _place_tag_covers(label, tagged):
+    """True when a declared [FACT: place] tag already covers this name."""
+    key = _normalize_place_label(label).lower()
+    if not key:
+        return True
+    for tag in tagged:
+        t = _normalize_place_label(tag).lower()
+        if not t:
+            continue
+        if key == t or key in t or t in key:
+            return True
+        key_tokens = {w for w in re.split(r"[\W_]+", key) if len(w) > 3}
+        tag_tokens = {w for w in re.split(r"[\W_]+", t) if len(w) > 3}
+        if key_tokens & tag_tokens & _LOCATION_WORDS:
+            return True
+    return False
+
+
+def dialogue_place_fact_gap(text, facts):
+    """Flag when quoted dialogue names a go-to place but no [FACT: place] tag covers it."""
+    spoken_places = extract_dialogue_place_names(text)
+    if not spoken_places:
         return None
-    tagged = {(p or "").lower() for p in (facts or {}).get("places") or []}
-    untagged = []
-    for rec in extracted:
-        label = (rec.get("label") or "").strip()
-        key = label.lower()
-        if not label:
-            continue
-        if key in tagged:
-            continue
-        if any(key in t or t in key for t in tagged):
-            continue
-        untagged.append(label)
+    tagged = (facts or {}).get("places") or []
+    untagged = [p for p in spoken_places if not _place_tag_covers(p, tagged)]
     if not untagged:
         return None
     names = ", ".join(untagged[:3])
     return (
-        f"prose names place(s) ({names}) "
+        f"dialogue names place(s) ({names}) "
         "but no [FACT: place | place_name] tag emitted"
     )
 

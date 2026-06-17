@@ -218,13 +218,47 @@ def _looks_truncated(text, response):
     return False
 
 
+def _json_payload_complete(text):
+    """True when visible text is parseable JSON (thinking may still hit MAX_TOKENS)."""
+    stripped = (text or "").strip()
+    if len(stripped) < 2:
+        return False
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
+        stripped = re.sub(r"\s*```$", "", stripped).strip()
+    try:
+        import json
+        json.loads(stripped)
+        return True
+    except json.JSONDecodeError:
+        pass
+    start = stripped.find("{")
+    if start >= 0:
+        depth = 0
+        for i, ch in enumerate(stripped[start:], start):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        import json
+                        json.loads(stripped[start:i + 1])
+                        return True
+                    except json.JSONDecodeError:
+                        break
+    return False
+
+
 def _looks_truncated_json(text, response):
     """JSON build-time output — do not apply prose ending heuristics."""
-    reason = _finish_reason(response)
-    if reason is not None and "MAX_TOKENS" in str(reason).upper():
-        return True
     stripped = (text or "").strip()
     if len(stripped) < 10:
+        return True
+    if _json_payload_complete(stripped):
+        return False
+    reason = _finish_reason(response)
+    if reason is not None and "MAX_TOKENS" in str(reason).upper():
         return True
     if stripped[-1] in "}]":
         return False

@@ -204,6 +204,18 @@ def test_json_truncation_allows_brace_endings():
     assert _looks_truncated_json('{"title": "Test"', None) is True
 
 
+def test_json_truncation_accepts_complete_payload_on_max_tokens():
+    from simulation.gemini_client import _looks_truncated_json
+
+    class _Resp:
+        candidates = [type("C", (), {"finish_reason": "MAX_TOKENS"})()]
+
+    payload = (
+        '{"kind":"talk","target_id":"g1","player_speech":"When?","time_target":null}'
+    )
+    assert _looks_truncated_json(payload, _Resp()) is False
+
+
 def test_prose_truncation_ignores_trailing_fact_tags():
     from simulation.gemini_client import _looks_truncated
 

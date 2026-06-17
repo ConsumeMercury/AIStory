@@ -62,4 +62,30 @@ def test_dialogue_place_fact_gap():
     gap = dialogue_place_fact_gap(scene, facts)
     assert gap is not None
     assert "customs house" in gap.lower()
-    assert "[FACT: place" in gap or "place" in gap.lower()
+    assert "dialogue names place" in gap.lower()
+
+
+def test_dialogue_place_fact_gap_ignores_narrative_scenery():
+    from simulation.narrator_facts import dialogue_place_fact_gap
+
+    scene = (
+        "You stop a yard from the low stone wall, sinking into the wet grit between the pavers. "
+        "He looks at your boots, then at the breadth of your chest. "
+        'His eyes dart toward the dark mouth of the cellars down the lane. '
+        '"The headmaster\'s ash is already in the river, friend."\n'
+        "[FACT: speaking | g1]\n"
+        "[FACT: place | cellars]\n"
+        "[FACT: place | the gutter]\n"
+    )
+    facts = parse_narrator_facts(scene)
+    assert dialogue_place_fact_gap(scene, facts) is None
+
+
+def test_extract_dialogue_place_names():
+    from simulation.narrator_facts import extract_dialogue_place_names
+
+    text = 'He says, "Meet me at the customs house before dawn."'
+    assert "customs house" in extract_dialogue_place_names(text)
+    assert not extract_dialogue_place_names(
+        "You stop a yard from the low stone wall near the wet grit."
+    )
