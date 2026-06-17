@@ -17,7 +17,7 @@ GUARDRAIL_RULES = (
     "CAST: NO FOCAL CHARACTER means no new named strangers with speeches.",
     "IDENTITY: Same NPC — same gender, role, and persona register every beat.",
     "PLAYER: Quote protagonist speech exactly once when given; never invent their lines.",
-    "TIME: Do not promise specific bell tolls, auctions, or timed meetings unless SCHEDULED EVENTS lists them; when promising one, emit [SCHEDULE: id | label | +Nh] on its own line.",
+    "TIME: Do not promise specific bell tolls, auctions, or timed meetings unless SCHEDULED EVENTS lists them; when you commit to WHEN something happens, emit [SCHEDULE: id | label | +Nh] on its own line — vague deflection without a tag is not enough.",
     "WAIT: wait until/for targets advance simulation time — do not narrate time passing if WAIT REFUSED.",
     "WITHDRAW: End exchange; clear focus after — do not continue old thread next beat unless player re-engages.",
     "TARGET: Role hints pick a matching NPC; keep scene_focus when that NPC fits the hint.",

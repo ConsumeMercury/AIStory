@@ -125,8 +125,8 @@ def _clause_has_unresolved_subject(rest, *, wh=None):
         return True
     if re.search(r"\b(she|he|they)\s+\w", text, re.I):
         return True
-    # Noun-phrase subjects break what/why reconstruction ("what the boy found").
-    if wh in ("what", "why", None):
+    # Noun-phrase subjects break wh reconstruction ("what the boy found", "when the proctors will...").
+    if wh in ("what", "why", "when", "how", "where", None):
         if re.match(r"^(the|a|an|this|that|next|last|each|every)\s+\w", text, re.I):
             if not re.search(r"\byou\b", text, re.I):
                 return True

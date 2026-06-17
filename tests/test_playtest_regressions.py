@@ -168,13 +168,14 @@ def test_travel_failed_inherits_prior_present_set():
     assert "Same people" in note
 
 
-def test_ask_when_reconstructs_shipment_question():
+def test_ask_when_noun_phrase_produces_no_speech():
     action = "Ask the man when the next shipment comes through"
-    speech = speech_for_ask_about(action)
-    assert speech == "When does the next shipment come through?"
-    ctx = interpret_action(action, {"scene_focus": "m1", "known_npcs": {}}, [_npc("m1", role="merchant")], {})
-    assert ctx["kind"] == "ask_about"
-    assert ctx["player_speech"] == speech
+    assert speech_for_ask_about(action) is None
+
+
+def test_mangled_when_noun_phrase_produces_no_speech():
+    action = "When the next shipment comes through?"
+    assert speech_for_ask_about(action) is None
 
 
 def test_compound_tell_and_ask_produces_no_speech():
@@ -188,13 +189,6 @@ def test_compound_tell_and_ask_produces_no_speech():
     assert ctx.get("player_speech") is None
 
 
-def test_mangled_when_fragment_reconstructs_not_echoes():
-    action = "When the next shipment comes through?"
-    speech = speech_for_ask_about(action)
-    assert speech == "When does the next shipment come through?"
-    assert "shipment comes through?" != speech
-
-
 def test_ask_what_noun_phrase_subject_produces_no_speech():
     action = "ask the scholar what the boy found"
     assert speech_for_ask_about(action) is None
@@ -206,6 +200,16 @@ def test_ask_what_noun_phrase_subject_produces_no_speech():
     )
     assert ctx["kind"] == "ask_about"
     assert ctx.get("player_speech") is None
+
+
+def test_ask_when_how_where_noun_phrase_produces_no_speech():
+    cases = [
+        "Ask the temple worker when the proctors will clear the crowd",
+        "Ask him how the merchants found the silver",
+        "Ask the guard where the shipment went",
+    ]
+    for action in cases:
+        assert speech_for_ask_about(action) is None, action
 
 
 def test_two_scholars_prefer_scene_focus():

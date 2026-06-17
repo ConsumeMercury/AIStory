@@ -163,4 +163,45 @@ def test_stalled_beat_note_on_repeated_failure():
 
 def test_looks_like_local_movement():
     assert looks_like_local_movement("go to the oak door")
+    assert looks_like_local_movement("go down the lane to the crowd")
+    assert looks_like_local_movement("push through to the center of the crowd")
     assert not looks_like_local_movement("go to the market district")
+
+
+def test_crowd_promoted_from_journal():
+    from simulation.local_places import resolve_local_movement, record_narrator_places
+
+    player = {
+        "area": "city:temple",
+        "journal": [{
+            "area": "city:temple",
+            "scene": "A knot of petitioners fills the center of the crowd near the buttress.",
+        }],
+        "story_flags": {},
+        "narrator_places": {},
+    }
+    record_narrator_places(player, player["journal"][0]["scene"], "city:temple")
+    sub, msg = resolve_local_movement(
+        "go down the lane to the crowd", player, "city:temple",
+    )
+    assert sub
+    assert "crowd" in sub["label"].lower()
+
+
+def test_unregistered_crowd_movement_hard_fails():
+    from simulation.scene_cast import select_scene_cast
+    from simulation.local_places import resolve_local_movement
+
+    player = {"area": "city:temple", "journal": [], "story_flags": {}, "narrator_places": {}}
+    sub, msg = resolve_local_movement(
+        "push through to the center of the crowd", player, "city:temple",
+    )
+    assert sub is None
+    assert msg and "APPROACH FAILED" in msg
+    priest = {"id": "p1", "role": "priest", "gender": "male", "status": "alive"}
+    player["scene_focus"] = "p1"
+    ctx = {"kind": "approach", "approach_failed": True, "action_summary": "push through to the crowd"}
+    focus, note, fid = select_scene_cast([priest], player, ctx)
+    assert focus == []
+    assert fid is None
+    assert "snap back" in note.lower() or "APPROACH FAILED" in note

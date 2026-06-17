@@ -490,6 +490,10 @@ def process_player_action(action, *, on_prose_chunk=None):
 
     action_ctx = interpret_action(replay_action, player, present, world, npcs=npcs)
     kind = action_ctx["kind"]
+    from simulation.local_places import looks_like_local_movement
+    if looks_like_local_movement(action) and kind in ("general", "explore", "observe"):
+        action_ctx["kind"] = "approach"
+        kind = "approach"
     if forced_kind:
         action_ctx["kind"] = forced_kind
         kind = forced_kind

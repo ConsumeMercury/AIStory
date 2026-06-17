@@ -36,6 +36,10 @@ _EVENT_PROMISES = (
      "coal_chute_entry", 2, "the junior boys enter through the coal-chutes"),
     (re.compile(r"\b(?:junior\s+)?boys?\b.*\b(?:chute|coal)\b", re.I),
      "coal_chute_entry", 2, "the junior boys enter through the coal-chutes"),
+    (re.compile(r"\bproctors?\b.*\b(?:clear|leave|open)\b.*\bcrowd\b", re.I),
+     "proctors_clear_crowd", 3, "the proctors clear the crowd"),
+    (re.compile(r"\b(?:at|with|on)\s+(?:the\s+)?dawn\s+bell\b", re.I),
+     "dawn_bell", 5, "the dawn bell rings"),
 )
 
 _WAIT_FOR_EVENT = re.compile(
@@ -244,6 +248,10 @@ def build_scheduled_events_block(player, area_id, world):
     lines.append(
         "- When you promise a timed plot event in dialogue, append on its own line: "
         "[SCHEDULE: event_id | human-readable label | +Nh] (simulation tag — stripped from player prose)."
+    )
+    lines.append(
+        "- When the player asks WHEN something will happen, answer with a concrete time OR emit "
+        "[SCHEDULE: event_id | human-readable label | +Nh]. Metaphor-only deflection is not enough."
     )
     lines.append(
         "- Do NOT invent timed plot events the player can wait for unless listed above or tagged."

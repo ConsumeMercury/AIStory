@@ -161,7 +161,15 @@ def select_scene_cast(present, player, action_ctx, max_focus=1):
             "No trailing dialogue from the last conversation partner unless they are in SCENE FACTS."
         ), None
 
-    if action_ctx.get("travel_failed") or action_ctx.get("approach_failed"):
+    if action_ctx.get("approach_failed"):
+        return [], (
+            "APPROACH FAILED — the protagonist did NOT reach the named place. "
+            "Do NOT describe partial movement through a crowd or lane then snap back to "
+            "the prior speaker's side. No focal NPC dialogue this beat — blocked movement, "
+            "crowd noise, or stillness only."
+        ), None
+
+    if action_ctx.get("travel_failed"):
         journal = player.get("journal") or []
         inherit_ids = set()
         if player.get("scene_focus"):

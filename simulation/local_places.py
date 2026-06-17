@@ -38,9 +38,14 @@ _LOCAL_POI = (
 
 _APPROACH_VERBS = re.compile(
     r"\b(enter|go inside|step into|walk into|go in to|go in|approach|"
-    r"go to|head to|walk to|move to|make for|follow(?:\s+the\s+)?"
+    r"go to|head to|walk to|move to|make for|go down|push through|slip toward|"
+    r"turn(?:\s+back)?\s+toward|turn toward|follow(?:\s+the\s+)?"
     r"(?:noise|sound|trail|smear|grease|tracks|scrap|line|blood)?)\b",
     re.I,
+)
+
+_CROWD_DEST = re.compile(
+    r"\b(?:the\s+)?(?:center of the\s+)?crowd\b", re.I,
 )
 
 _NAV_DEST = re.compile(
@@ -118,6 +123,8 @@ def extract_narrator_destinations(scene):
         _add(m.group(1))
     for m in _BEHIND_DEST.finditer(scene):
         _add(f"behind the {m.group(1)}")
+    for m in _CROWD_DEST.finditer(scene):
+        _add("the crowd")
 
     return found[:8]
 
@@ -140,6 +147,9 @@ def _destination_query(action):
     if not action:
         return None
     for pattern in (
+        r"\b(?:push through|go down|slip toward|turn(?:\s+back)?\s+toward|turn toward)\s+"
+        r"(?:\w+\s+){0,8}?to\s+(?:the\s+)?(.+?)(?:\s*$|\.|,)",
+        r"\b(?:toward|towards|into)\s+(?:the\s+)?(?:center of the\s+)?(.+?)(?:\s*$|\.|,)",
         r"\b(?:go|head|walk|move|slip|ease|make for)\s+behind\s+(?:the\s+)?(.+?)(?:\s*$|\.|,)",
         r"\b(?:go to|head to|walk to|move to|make for|enter|approach|"
         r"turn back toward|turn toward|follow(?:\s+the\s+)?(?:noise|sound|trail)?)\s+"
@@ -148,6 +158,8 @@ def _destination_query(action):
         m = re.search(pattern, action.strip(), re.I)
         if m:
             return _clean_place_label(m.group(1))
+    if _CROWD_DEST.search(action):
+        return "the crowd"
     return None
 
 
@@ -274,6 +286,10 @@ def looks_like_local_movement(action):
     qtokens = _token_set(query)
     if qtokens & _TRAVEL_DEST:
         return False
+    if _CROWD_DEST.search(action):
+        return True
+    if re.search(r"\b(go down|push through|slip toward|turn(?:\s+back)?\s+toward)\b", action, re.I):
+        return bool(query)
     if _NAV_DEST.search(query):
         return True
     return len(qtokens) <= 3 and len(query.split()) >= 2
@@ -289,6 +305,13 @@ def resolve_local_movement(action, player, current_area):
 
     text = action.lower()
     flags = player.setdefault("story_flags", {})
+
+    query = _destination_query(action)
+    promoted = _match_promoted_place(action, player, current_area)
+    if not promoted and query:
+        promoted = _promote_from_journal_query(query, player, current_area)
+    if promoted:
+        return _promote_subplace(player, current_area, promoted)
 
     for pattern, sub_id, label in _LOCAL_POI:
         if not pattern.search(text):
@@ -309,19 +332,21 @@ def resolve_local_movement(action, player, current_area):
         )
         return sub, directive
 
-    promoted = _match_promoted_place(action, player, current_area)
-    if not promoted:
-        query = _destination_query(action)
-        promoted = _promote_from_journal_query(query, player, current_area)
-    if promoted:
-        return _promote_subplace(player, current_area, promoted)
-
     orphan, label = _orphan_local_approach(action, player, current_area)
     if orphan:
         return None, (
             f"APPROACH FAILED — '{label}' is not a registered place here. "
             f"The protagonist does NOT arrive or slip partway in. "
-            f"Do NOT describe perpetual approach or buyers appearing. "
+            f"Do NOT describe partial movement then return them to the prior speaker. "
+            f"One short beat of blocked movement only."
+        )
+
+    query = _destination_query(action)
+    if query and _APPROACH_VERBS.search(action or ""):
+        return None, (
+            f"APPROACH FAILED — '{query}' is not a registered place here. "
+            f"The protagonist does NOT arrive. Do NOT describe slipping partway in "
+            f"then snapping back to the prior conversation partner. "
             f"One short beat of blocked movement only."
         )
 
