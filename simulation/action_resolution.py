@@ -9,6 +9,7 @@ import re
 from generation.descriptor_generator import short_descriptor, appearance_notes, gender_label
 from generation.item_generator import generate_item
 from simulation.item_engine import resolve_loot_to_player, equip_item, ensure_equipment
+from simulation.narrator_items import match_narrator_item_pickup, consume_narrator_item
 from simulation.target_resolution import find_npc_by_name_in_text
 
 log = logging.getLogger(__name__)
@@ -259,6 +260,68 @@ def pick_explore_hook(present, player, action_ctx=None):
     return candidates[0]
 
 
+def _area_id(area, player):
+    if isinstance(area, dict):
+        return area.get("id") or player.get("area")
+    return player.get("area")
+
+
+def _acquire_from_narrator_item(rec, player, area, tick, skill_success=True):
+    """Materialize a previously narrator-registered item into inventory."""
+    if not skill_success:
+        return (
+            "The search fails — nothing useful in reach, or someone notices you looking.",
+            None,
+        )
+    category = rec.get("category") or "material"
+    template = rec.get("template_name")
+    source = "wilderness"
+    area_id = _area_id(area, player)
+    if area and isinstance(area, dict) and area.get("type") == "district":
+        if area.get("city"):
+            source = "merchant"
+        if "docks" in (area_id or ""):
+            source = "bandit"
+    kwargs = {"category": category, "source": source, "created_tick": tick}
+    if template:
+        kwargs["template_name"] = template
+    elif rec.get("label"):
+        kwargs["template_name"] = _normalize_narrator_template(rec.get("label"))
+    _iid, item = generate_item(**kwargs)
+    item["owner"] = "player"
+    summary = resolve_loot_to_player(player, [item])
+    ensure_equipment(player)
+    if category == "weapon" and not player.get("equipment", {}).get("weapon"):
+        equip_item(player, item["id"])
+    consume_narrator_item(player, area_id, rec.get("id"))
+    label = rec.get("label") or item.get("name")
+    directive = (
+        f"MECHANICAL FACT: {summary} "
+        f"The protagonist NOW HAS {label} in inventory — describe picking it up once, "
+        f"do not invent a different item."
+    )
+    action_ctx_item = {
+        "id": item["id"],
+        "name": item["name"],
+        "category": item.get("category"),
+        "rarity": item.get("rarity"),
+    }
+    player["last_acquired_item"] = action_ctx_item
+    return directive, item
+
+
+def _normalize_narrator_template(label):
+    """Map prose label to item generator template when possible."""
+    lower = (label or "").lower()
+    if "parchment" in lower or "scrap" in lower or "letter" in lower:
+        return "folded letter"
+    if "beetle" in lower:
+        return "dead beetle"
+    if "coin" in lower:
+        return "silver coin"
+    return None
+
+
 def validate_acquire_item(action, player, area):
     """
     Refuse loot fabrication when the referent is not a valid takeable item.
@@ -272,6 +335,9 @@ def validate_acquire_item(action, player, area):
         return True, ""
 
     names_item = any(p.search(action or "") for p, _, _, _ in _ITEM_KEYWORDS)
+    narr_item = match_narrator_item_pickup(action, player, _area_id(area, player))
+    if narr_item:
+        return True, ""
     if _NON_LOOT_REFERENTS.search(action or "") and not names_item:
         return False, (
             "ACQUIRE REFUSED — there is nothing like that here to take. "
@@ -306,6 +372,9 @@ def try_acquire_item(action, player, area, tick, skill_success=True):
         return None, None
 
     matched = None
+    narr = match_narrator_item_pickup(action, player, _area_id(area, player))
+    if narr:
+        return _acquire_from_narrator_item(narr, player, area, tick, skill_success=skill_success)
     for pattern, category, item_type, template in _ITEM_KEYWORDS:
         if pattern.search(action):
             matched = (category, item_type, template)

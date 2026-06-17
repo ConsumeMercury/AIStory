@@ -35,12 +35,42 @@ _RELOCATION_DIRECTIVE = (
 )
 
 
-def mark_scene_relocation(player, action_ctx):
+def collect_prior_cast_ids(player, prior_present=None):
+    """
+    NPC ids to leave behind on relocation — resolve before scene_subplace changes.
+    Falls back through persisted cast, journal, scene focus, and the live present list.
+    """
+    stored = player.get("scene_cast") or {}
+    ids = list(stored.get("ids") or [])
+    if ids:
+        return ids
+
+    journal = player.get("journal") or []
+    if journal:
+        last = journal[-1]
+        if last.get("area") == player.get("area"):
+            ids = list(last.get("scene_cast_ids") or last.get("focus_cast") or [])
+            if ids:
+                return ids
+            focus = last.get("focus_npc")
+            if focus:
+                return [focus]
+
+    if prior_present:
+        ids = [n["id"] for n in prior_present if n.get("id")]
+        if ids:
+            return ids
+
+    focus = player.get("scene_focus")
+    return [focus] if focus else []
+
+
+def mark_scene_relocation(player, action_ctx, *, prior_present=None, prior_cast_ids=None):
     """
     Flag a place/sub-place change so cast resets and prior NPCs stay behind.
     Call whenever resolve_local_movement or travel promotion changes scene_subplace.
     """
-    prior_ids = list((player.get("scene_cast") or {}).get("ids") or [])
+    prior_ids = list(prior_cast_ids or collect_prior_cast_ids(player, prior_present))
     if prior_ids:
         action_ctx["left_behind_cast"] = prior_ids
     player["scene_focus"] = None
@@ -110,11 +140,16 @@ def resolve_travel_destination(action, player, current_area, dests, areas):
 
 
 def sync_scene_focus(player, present, npcs):
-    """Drop scene focus when that NPC is not in the current area."""
+    """Drop scene focus when that NPC is not in the current scene."""
     focus_id = player.get("scene_focus")
     if not focus_id:
         return
     if any(n["id"] == focus_id for n in present):
+        return
+    npc = (npcs or {}).get(focus_id, {})
+    player_area = player.get("area")
+    if player_area and npc.get("area") and npc.get("area") != player_area:
+        player["scene_focus"] = None
         return
     player["scene_focus"] = None
 

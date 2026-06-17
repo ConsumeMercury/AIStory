@@ -4,7 +4,7 @@ import pytest
 
 from simulation.action_interpreter import interpret_action
 from simulation.local_places import resolve_local_movement, looks_like_local_movement
-from simulation.scene_coherence import resolve_travel_destination, place_label
+from simulation.scene_coherence import resolve_travel_destination, place_label, sync_scene_focus
 from simulation.target_resolution import resolve_action_target
 
 
@@ -220,3 +220,34 @@ def test_unregistered_crowd_movement_hard_fails():
     assert focus == []
     assert fid is None
     assert "snap back" in note.lower() or "APPROACH FAILED" in note
+
+
+def test_sync_clears_focus_when_npc_in_other_area():
+    player = {
+        "area": "stormbridge:docks",
+        "scene_focus": "npc_priest",
+    }
+    npcs = {
+        "npc_priest": {"id": "npc_priest", "area": "stormbridge:temple_row", "status": "alive"},
+    }
+    present = [{"id": "npc_other", "area": "stormbridge:docks"}]
+    sync_scene_focus(player, present, npcs)
+    assert player["scene_focus"] is None
+
+
+def test_sync_keeps_focus_when_npc_still_in_present():
+    player = {"area": "stormbridge:docks", "scene_focus": "npc_priest"}
+    npcs = {
+        "npc_priest": {"id": "npc_priest", "area": "stormbridge:temple_row", "status": "alive"},
+    }
+    present = [{"id": "npc_priest"}]
+    sync_scene_focus(player, present, npcs)
+    assert player["scene_focus"] == "npc_priest"
+
+
+def test_sync_keeps_focus_when_npc_present():
+    player = {"area": "stormbridge:docks", "scene_focus": "npc_a"}
+    npcs = {"npc_a": {"id": "npc_a", "area": "stormbridge:docks", "status": "alive"}}
+    present = [{"id": "npc_a"}]
+    sync_scene_focus(player, present, npcs)
+    assert player["scene_focus"] == "npc_a"

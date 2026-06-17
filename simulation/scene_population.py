@@ -52,6 +52,21 @@ def should_reset_scene_cast(action_ctx, player):
     return False
 
 
+def _journal_prior_cast_ids(player):
+    """Last beat's cast at this area — used when scene_cast is stale after subplace change."""
+    journal = player.get("journal") or []
+    if not journal:
+        return []
+    last = journal[-1]
+    if last.get("area") != player.get("area"):
+        return []
+    ids = list(last.get("scene_cast_ids") or last.get("focus_cast") or [])
+    focus = last.get("focus_npc")
+    if focus and focus not in ids:
+        ids.append(focus)
+    return ids
+
+
 def _exclude_cast_ids(action_ctx, player):
     """NPC ids that must not carry over after relocation or place-key change."""
     exclude = set(action_ctx.get("left_behind_cast") or [])
@@ -59,8 +74,12 @@ def _exclude_cast_ids(action_ctx, player):
     area, sub = _place_key(player)
     if action_ctx.get("relocated") or action_ctx.get("travel_arrival"):
         exclude.update(stored.get("ids") or [])
+        if not exclude:
+            exclude.update(_journal_prior_cast_ids(player))
     elif stored.get("area") and (stored.get("area") != area or stored.get("subplace") != sub):
         exclude.update(stored.get("ids") or [])
+        if not exclude:
+            exclude.update(_journal_prior_cast_ids(player))
     return exclude
 
 
@@ -140,9 +159,9 @@ def resolve_scene_present(all_present, player, action_ctx, npcs):
 def persist_scene_cast(player, scene_present, action_ctx):
     """Save the bounded cast for the next beat at this place."""
     area, sub = _place_key(player)
-    ids = [n["id"] for n in scene_present]
-    tid = action_ctx.get("target_id")
     left = set(action_ctx.get("left_behind_cast") or [])
+    ids = [n["id"] for n in scene_present if n["id"] not in left]
+    tid = action_ctx.get("target_id")
     if tid and tid not in ids and tid not in left:
         ids.append(tid)
     player["scene_cast"] = {

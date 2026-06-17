@@ -103,6 +103,17 @@ def test_role_mismatch_flags_narrator_role_drift():
     assert role_mismatch(text, "merchant", "male") is not None
 
 
+def test_role_mismatch_ignores_priest_addressing_player_soldier():
+    from simulation.prose_validator import role_mismatch
+
+    text = (
+        "He flinched, and his head lifted slowly. His eyes met yours. "
+        '"That," he said, his voice a low murmur, '
+        '"is the scent of iron, soldier. And perhaps of spilled coin."'
+    )
+    assert role_mismatch(text, "priest", "male") is None
+
+
 def test_log_scene_prose_issues_warns_but_does_not_raise(caplog):
     npcs = {"p1": _npc("p1")}
     player = {"scene_focus": "p1", "known_npcs": {"p1": {"name_known": True}}}

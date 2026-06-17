@@ -23,10 +23,12 @@ from simulation.scene_coherence import (
     resolve_target_and_absence,
     resolve_travel_destination,
     place_label,
+    collect_prior_cast_ids,
     mark_scene_relocation,
     DIALOGUE_KINDS,
 )
 from simulation.local_places import resolve_local_movement, record_narrator_places
+from simulation.narrator_items import record_narrator_items
 from simulation.generation_guardrails import build_hard_constraints_block, build_misname_directive
 from simulation.prose_validator import (
     log_scene_prose_issues,
@@ -785,9 +787,15 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
             save(PLAYER_FILE, player)
 
     if kind == "approach":
+        prior_present = list(present)
+        prior_cast_ids = collect_prior_cast_ids(player, prior_present)
         sub, local_msg = resolve_local_movement(action, player, player.get("area"))
         if sub:
-            mark_scene_relocation(player, action_ctx)
+            mark_scene_relocation(
+                player, action_ctx,
+                prior_present=prior_present,
+                prior_cast_ids=prior_cast_ids,
+            )
             extra_directive = local_msg
             with state_lock():
                 save(PLAYER_FILE, player)
@@ -810,12 +818,18 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
 
     if kind == "travel":
         from simulation.travel_engine import travel, list_destinations
+        prior_present = list(present)
+        prior_cast_ids = collect_prior_cast_ids(player, prior_present)
         dests = list_destinations(player.get("area"))
         chosen, subplace, travel_msg = resolve_travel_destination(
             action, player, player.get("area"), dests, areas_data,
         )
         if subplace:
-            mark_scene_relocation(player, action_ctx)
+            mark_scene_relocation(
+                player, action_ctx,
+                prior_present=prior_present,
+                prior_cast_ids=prior_cast_ids,
+            )
             extra_directive = travel_msg
             with state_lock():
                 save(PLAYER_FILE, player)
@@ -823,7 +837,11 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
                 player, npcs, world, action_ctx, tick, persist=False,
             )
         elif chosen:
-            mark_scene_relocation(player, action_ctx)
+            mark_scene_relocation(
+                player, action_ctx,
+                prior_present=prior_present,
+                prior_cast_ids=prior_cast_ids,
+            )
             action_ctx["travel_arrival"] = True
             travel_before = snapshot_before_travel()
             ok, msg, hours, _ = travel(chosen, simulation_runner._run_tick)
@@ -1389,9 +1407,15 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
         world = load(WORLD_FILE, {})
         update_player_goals(player, kind, action_ctx, world)
         if scene:
-            if record_narrator_places(player, scene, player.get("area")):
-                save(PLAYER_FILE, player)
-            if record_scheduled_events(player, scene, player.get("area"), world):
+            area_id = player.get("area")
+            changed = False
+            if record_narrator_places(player, scene, area_id):
+                changed = True
+            if record_narrator_items(player, scene, area_id, tick=tick):
+                changed = True
+            if record_scheduled_events(player, scene, area_id, world):
+                changed = True
+            if changed:
                 save(PLAYER_FILE, player)
             scene = strip_narrator_facts(scene)
         cache_id = focal_id or action_ctx.get("target_id") or player.get("scene_focus")

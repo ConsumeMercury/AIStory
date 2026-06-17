@@ -24,7 +24,7 @@ _ROLE_WORDS = {
     "blacksmith": ("blacksmith", "smith", "forge"),
     "merchant": ("merchant", "trader", "stall"),
     "sailor": ("sailor", "dockhand", "crewman"),
-    "guard": ("guard", "watchman", "soldier"),
+    "guard": ("guard", "watchman"),
 }
 
 _FOCAL_DIALOGUE_KINDS = frozenset({
@@ -141,6 +141,21 @@ def _narrative_outside_quotes(sentence):
     return re.sub(r'"[^"]*"', " ", sentence or "")
 
 
+def _player_vocative_soldier(text):
+    """True when 'soldier' addresses the protagonist inside quoted dialogue."""
+    if not text or not re.search(r"\bsoldier\b", text, re.I):
+        return False
+    for quote in re.findall(r'"([^"]*)"', text):
+        if re.search(r",\s*soldier\b", quote, re.I):
+            return True
+    if re.search(r'"[^"]*,\s*soldier\b', text, re.I):
+        return True
+    narrative = _narrative_outside_quotes(text)
+    if re.search(r"\bsoldier\b", narrative, re.I):
+        return False
+    return False
+
+
 def role_mismatch(text, role, gender, *, allow_roles=()):
     if not role:
         return None
@@ -154,6 +169,11 @@ def role_mismatch(text, role, gender, *, allow_roles=()):
         lower = narrative.lower()
         if role in lower or any(w in lower for w in focal_words):
             continue
+        if _player_vocative_soldier(sent) or _player_vocative_soldier(text):
+            continue
+        if re.search(r"\bsoldier'?s?\b", lower) and role not in ("soldier", "guard", "mercenary"):
+            if not (_player_vocative_soldier(sent) or _player_vocative_soldier(text)):
+                return f"focal role is {role} but prose uses guard imagery"
         if re.match(r"^\s*You\b", narrative) and re.search(r"\bguards?\b", lower):
             continue
         for wrong_role, words in _ROLE_WORDS.items():
@@ -420,8 +440,9 @@ def build_prose_correction_block(issues):
             role, wrong = m.group(1), m.group(2)
             lines.append(
                 f"  → The focal NPC is a {role.upper()}, NOT a {wrong}. "
-                f"Remove all {wrong}/soldier/combat/borderland/threat imagery applied to them; "
-                f"describe trade, craft, stall, or work befitting a {role}."
+                f"Remove all {wrong}/combat/borderland/threat imagery applied to them; "
+                f"describe vestments, ritual, trade, or work befitting a {role}. "
+                f"'Soldier' may address the protagonist only inside quoted speech."
             )
     lines.append(
         "- Obey SCENE FACTS, HARD CONSTRAINTS, and WHO IS HERE. "

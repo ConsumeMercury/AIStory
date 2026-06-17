@@ -16,6 +16,14 @@ if ROOT not in sys.path:
 CAPTURED = []
 
 
+class AuditSkip(Exception):
+    """Raised when an audit cannot run in the current world state."""
+
+    def __init__(self, reason):
+        self.reason = reason
+        super().__init__(reason)
+
+
 def _mock_generate_scene(**kwargs):
     action_context = kwargs.get("action_context") or {}
     present = kwargs.get("present_npcs") or []
@@ -96,6 +104,9 @@ def _reset_player_baseline():
     player.pop("boundary_stats", None)
     player.pop("boundary_history", None)
     player.pop("last_boundary_trace", None)
+    player.pop("boundary_session", None)
+    player.pop("scene_cast", None)
+    player.pop("narrator_items", None)
     stats = player.setdefault("stats", {})
     stats.setdefault("max_health", stats.get("health", 100))
     stats.setdefault("max_stamina", stats.get("stamina", 30))
@@ -108,6 +119,18 @@ def _reset_player_baseline():
     area = player.get("area")
     npcs = load("characters/npcs.json", {})
     _restore_npc_home_areas(npcs)
+    area = player.get("area")
+    loc = player.get("location")
+    for npc in npcs.values():
+        if npc.get("status") != "alive":
+            continue
+        if loc and npc.get("location") == loc and area and npc.get("area") != area:
+            npc["area"] = area
+    focus = player.get("scene_focus")
+    if focus:
+        fn = npcs.get(focus, {})
+        if area and fn.get("area") and fn.get("area") != area:
+            player["scene_focus"] = None
     for npc in npcs.values():
         if npc.get("area") == area or npc.get("location") == player.get("location"):
             if npc.get("status") == "dead":
@@ -356,8 +379,7 @@ def audit_talk_priest_overrides_focus():
 
     priest_ids = [nid for nid, role in present_roles.items() if role == "priest"]
     if not priest_ids:
-        print("SKIP  talk_priest (no priest in area)")
-        return
+        raise AuditSkip("no priest in area")
 
     soldier_ids = [nid for nid, role in present_roles.items() if role in ("soldier", "guard", "mercenary")]
     focus_id = soldier_ids[0] if soldier_ids else list(present_roles.keys())[0]
@@ -382,8 +404,7 @@ def audit_withdraw_clears_focus():
     player = load("player/player.json", {})
     focus = player.get("scene_focus")
     if not focus:
-        print("SKIP  withdraw_clears_focus (no focus after look around)")
-        return
+        raise AuditSkip("no focus after look around")
     _run_sequence(["leave"])
     player = load("player/player.json", {})
     _assert(player.get("scene_focus") is None, "withdraw should clear scene_focus")
@@ -470,6 +491,7 @@ def _inject_audit_scholars(player, npcs):
 
 
 _AUDIT_SCHOLAR_IDS = ("audit_scholar_a", "audit_scholar_b")
+_AUDIT_FIXTURE_IDS = _AUDIT_SCHOLAR_IDS + ("audit_priest_reloc",)
 
 
 def _cleanup_audit_scholars(npcs, player=None):
@@ -480,24 +502,29 @@ def _cleanup_audit_scholars(npcs, player=None):
         player = load("player/player.json", {})
 
     changed_npcs = False
-    for key in _AUDIT_SCHOLAR_IDS:
+    for key in _AUDIT_FIXTURE_IDS:
         if key in npcs:
             del npcs[key]
             changed_npcs = True
 
     changed_player = False
-    if player.get("scene_focus") in _AUDIT_SCHOLAR_IDS:
+    if player.get("scene_focus") in _AUDIT_FIXTURE_IDS:
         player["scene_focus"] = None
         changed_player = True
 
     journal = player.get("journal") or []
     filtered = [
         entry for entry in journal
-        if (entry.get("focus_npc") or "") not in _AUDIT_SCHOLAR_IDS
+        if (entry.get("focus_npc") or "") not in _AUDIT_FIXTURE_IDS
     ]
     if len(filtered) != len(journal):
         player["journal"] = filtered
         changed_player = True
+
+    for key in ("boundary_history", "last_boundary_trace", "boundary_session"):
+        if key in player:
+            del player[key]
+            changed_player = True
 
     if changed_npcs:
         save("characters/npcs.json", npcs)
@@ -574,6 +601,66 @@ def audit_scheduled_event_fires_on_wait():
     _cleanup_audit_scholars(npcs)
 
 
+def audit_approach_excludes_prior_cast():
+    """Approach to sub-place must leave prior focal NPC behind."""
+    from storage import load, save
+
+    _reset_player_baseline()
+    player = load("player/player.json", {})
+    npcs = load("characters/npcs.json", {})
+    area = player.get("area")
+    priest_ids = [
+        nid for nid, npc in npcs.items()
+        if npc.get("area") == area and npc.get("role") == "priest" and npc.get("status") == "alive"
+    ]
+    priest_id = priest_ids[0] if priest_ids else "audit_priest_reloc"
+    if not priest_ids:
+        npcs[priest_id] = {
+            "id": priest_id,
+            "name": "Audit Priest",
+            "role": "priest",
+            "gender": "male",
+            "status": "alive",
+            "area": area,
+            "location": player.get("location"),
+            "physique": {"presentation": 50},
+        }
+        save("characters/npcs.json", npcs)
+    player["scene_focus"] = priest_id
+    player["scene_cast"] = {"area": area, "subplace": None, "ids": [priest_id]}
+    player["journal"] = [{
+        "area": area,
+        "subplace": None,
+        "focus_npc": priest_id,
+        "scene_cast_ids": [priest_id],
+        "scene": "The coal chutes rise at the edge of the docks.",
+    }]
+    player.setdefault("narrator_places", {}).setdefault(area, {})["coal_chutes"] = {
+        "id": "coal_chutes",
+        "label": "the coal chutes",
+        "tokens": ["coal", "chutes"],
+    }
+    save("player/player.json", player)
+
+    _run_sequence(["go to the coal chutes"])
+    player = load("player/player.json", {})
+    trace = player.get("last_boundary_trace") or {}
+    reloc = trace.get("reloc") or {}
+    left = set(reloc.get("left_behind_cast") or [])
+    journal = player.get("journal") or []
+    last = journal[-1] if journal else {}
+    cast_ids = set(last.get("scene_cast_ids") or [])
+    _assert(
+        priest_id in left,
+        f"priest should be in left_behind_cast, got {left!r}",
+    )
+    _assert(
+        priest_id not in cast_ids,
+        f"priest should not repopulate scene cast after approach, got {cast_ids!r}",
+    )
+    _cleanup_audit_scholars(npcs, player)
+
+
 def main():
     from simulation import simulation_runner
     simulation_runner.stop()
@@ -591,24 +678,37 @@ def main():
         ("travel_failed_inherits_focus", audit_travel_failed_inherits_focus),
         ("same_role_scholar_focus", audit_same_role_scholar_focus),
         ("scheduled_event_fires_on_wait", audit_scheduled_event_fires_on_wait),
+        ("approach_excludes_prior_cast", audit_approach_excludes_prior_cast),
     ]
     failed = []
+    skipped = []
     try:
         for name, fn in tests:
             try:
                 fn()
                 print(f"OK    {name}")
+            except AuditSkip as e:
+                skipped.append(name)
+                print(f"SKIP  {name} ({e.reason})")
             except Exception as e:
                 failed.append(name)
                 print(f"FAIL  {name}: {e}")
     finally:
         from storage import load
-        _cleanup_audit_scholars(load("characters/npcs.json", {}))
+        _cleanup_audit_scholars(
+            load("characters/npcs.json", {}),
+            load("player/player.json", {}),
+        )
         simulation_runner.start()
     if failed:
         print(f"\n{len(failed)} audit(s) failed: {', '.join(failed)}")
         sys.exit(1)
-    print(f"\nAll {len(tests)} simulation audits passed.")
+    n_ok = len(tests) - len(skipped)
+    print(f"\nAll {n_ok} simulation audits passed.", end="")
+    if skipped:
+        print(f" ({len(skipped)} skipped)")
+    else:
+        print()
 
 
 if __name__ == "__main__":

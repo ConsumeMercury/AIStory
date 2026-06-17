@@ -179,6 +179,17 @@ def test_schedule_untagged_flagged_by_gate():
     assert "SCHEDULE" in issue
 
 
+def test_coal_chute_location_does_not_trigger_schedule_promise():
+    from simulation.scheduled_events import extract_event_promises
+
+    scene = (
+        "You step past the priest and follow the slope of the cobblestones. "
+        "The coal chutes rise ahead, dark gaping mouths against the dawn sky."
+    )
+    regex_caps = [p for p in extract_event_promises(scene) if p.get("source") == "regex"]
+    assert not regex_caps
+
+
 def test_wait_until_dawn_updates_time_of_day():
     from simulation.world_clock import advance_clock, _recompute
 

@@ -68,7 +68,7 @@ def strip_narrator_facts(text):
     return cleaned.strip()
 
 
-def build_fact_emission_block(scene_state=None):
+def build_fact_emission_block(scene_state=None, action_ctx=None):
     """Tell narrator which structured facts to declare."""
     lines = [
         "STRUCTURED FACTS (simulation tags — stripped from player prose; declare alongside story):",
@@ -78,6 +78,7 @@ def build_fact_emission_block(scene_state=None):
         "[FACT: place | place_name]",
         "- Timed promises: [SCHEDULE: event_id | label | +Nh] (required for WHEN commitments)",
         "Use real cast ids from SCENE FACTS only — never invent ids in tags.",
+        "Every dialogue beat with quoted speech MUST include [FACT: speaking | focal_npc_id].",
     ]
     if scene_state and scene_state.cast:
         ids = ", ".join(n["id"] for n in scene_state.cast[:6])
@@ -255,5 +256,9 @@ def build_fact_correction_block(issues):
         lines.append(f"- {issue}")
     lines.append(
         "- Emit corrected [FACT: …] tags matching SCENE FACTS, or omit tags and obey constraints."
+    )
+    lines.append(
+        "- On dialogue beats, include [FACT: speaking | focal_npc_id] AND any [SCHEDULE: …] "
+        "tags in the same draft — regen must not drop structured tags."
     )
     return "\n".join(lines)

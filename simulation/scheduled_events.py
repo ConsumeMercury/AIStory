@@ -46,9 +46,15 @@ _EVENT_PROMISES = (
      "tide_bell_twice", 2, "the tide-bell rings twice"),
     (re.compile(r"\b(?:rings|ring)\s+(?:twice|two\s+times)\b.*\btide[\s-]?bell\b", re.I),
      "tide_bell_twice", 2, "the tide-bell rings twice"),
-    (re.compile(r"\bcoal[\s-]?chutes?\b", re.I),
+    (re.compile(
+        r"\b(?:wait for|when|until)\b[^.\"]{0,100}\bcoal[\s-]?chutes?\b", re.I),
      "coal_chute_entry", 2, "the junior boys enter through the coal-chutes"),
-    (re.compile(r"\b(?:junior\s+)?boys?\b.*\b(?:chute|coal)\b", re.I),
+    (re.compile(
+        r"\b(?:junior\s+)?boys?\b[^.\"]{0,80}\b(?:enter|come|arrive|go)\b"
+        r"[^.\"]{0,60}\b(?:chute|coal)\b", re.I),
+     "coal_chute_entry", 2, "the junior boys enter through the coal-chutes"),
+    (re.compile(
+        r"\b(?:junior\s+)?boys?\b[^.\"]{0,40}\b(?:chute|coal)\b", re.I),
      "coal_chute_entry", 2, "the junior boys enter through the coal-chutes"),
     (re.compile(r"\bproctors?\b.*\b(?:clear|leave|open)\b.*\bcrowd\b", re.I),
      "proctors_clear_crowd", 3, "the proctors clear the crowd"),

@@ -242,6 +242,72 @@ def test_travel_subplace_relocation_excludes_prior_focal():
     assert "p1" not in {n["id"] for n in present}
 
 
+def test_mark_relocation_uses_journal_when_scene_cast_empty():
+    from simulation.scene_coherence import mark_scene_relocation, collect_prior_cast_ids
+
+    priest = _npc("p1", role="priest", name="Priest")
+    area = [priest, _npc("x1"), _npc("x2")]
+    npcs = {n["id"]: n for n in area}
+    player = {
+        "area": "stormbridge:docks",
+        "scene_subplace": {"id": "coal_chutes", "label": "the coal chutes"},
+        "scene_focus": None,
+        "scene_cast": {},
+        "journal": [{
+            "area": "stormbridge:docks",
+            "subplace": None,
+            "focus_npc": "p1",
+            "scene_cast_ids": ["p1"],
+        }],
+    }
+    prior_present = [priest]
+    prior_ids = collect_prior_cast_ids(player, prior_present)
+    assert prior_ids == ["p1"]
+    ctx = {"kind": "approach", "relocated": True, "left_behind_cast": prior_ids}
+    present = resolve_scene_present(area, player, ctx, npcs)
+    assert "p1" not in {n["id"] for n in present}
+    assert ctx["left_behind_cast"] == ["p1"]
+
+
+def test_approach_mark_populates_left_behind_from_present():
+    from simulation.scene_coherence import mark_scene_relocation, collect_prior_cast_ids
+    from simulation.local_places import resolve_local_movement
+
+    priest = _npc("p1", role="priest", name="Priest")
+    area = [priest, _npc("x1"), _npc("x2")]
+    npcs = {n["id"]: n for n in area}
+    player = {
+        "area": "stormbridge:docks",
+        "scene_subplace": None,
+        "scene_focus": "p1",
+        "scene_cast": {},
+        "journal": [{
+            "area": "stormbridge:docks",
+            "subplace": None,
+            "focus_npc": "p1",
+            "scene_cast_ids": ["p1"],
+            "scene": "Meet at the coal chutes before dawn.",
+        }],
+        "narrator_places": {},
+        "story_flags": {},
+    }
+    prior_present = [priest]
+    prior_cast_ids = collect_prior_cast_ids(player, prior_present)
+    sub, _msg = resolve_local_movement("go to the coal chutes", player, "stormbridge:docks")
+    assert sub
+    ctx = {"kind": "approach"}
+    mark_scene_relocation(
+        player, ctx,
+        prior_present=prior_present,
+        prior_cast_ids=prior_cast_ids,
+    )
+    assert "p1" in (ctx.get("left_behind_cast") or [])
+    present = resolve_scene_present(area, player, ctx, npcs)
+    ids = {n["id"] for n in present}
+    assert "p1" not in ids
+    assert len(ids) >= 1
+
+
 def test_subplace_mismatch_excludes_prior_cast_without_reloc_flag():
     priest = _npc("p1", role="priest", name="Priest")
     priest["key_npc"] = True
