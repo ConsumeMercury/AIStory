@@ -112,6 +112,18 @@ def run_world_health_report(*, strict=False):
     if isinstance(events, list) and len(events) > 5000:
         warnings.append(f"event log large ({len(events)} entries)")
 
+    try:
+        from simulation.event_archiver import archive_stats
+        estats = archive_stats()
+        if estats.get("hot_events", 0) > estats.get("hot_cap", 2500):
+            warnings.append(
+                f"event log over hot cap ({estats['hot_events']}/{estats['hot_cap']})"
+            )
+        if estats.get("archived_events_total", 0):
+            pass  # archival active — informational only
+    except Exception:
+        estats = {}
+
     journal = player.get("journal") or []
     if len(journal) > 280:
         warnings.append(f"journal near cap ({len(journal)} entries)")
@@ -149,6 +161,7 @@ def run_world_health_report(*, strict=False):
             "rumors": len(rumors) if isinstance(rumors, list) else 0,
             "events": len(events) if isinstance(events, list) else 0,
             "journal": len(journal),
+            **({f"events_{k}": v for k, v in (estats or {}).items()} if estats else {}),
         },
     }
 

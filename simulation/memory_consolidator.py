@@ -21,20 +21,26 @@ def _similar(a, b):
 
 
 def merge_narrative_memories(player):
+    from simulation.importance_router import should_retain_memory
+
     mems = player.get("narrative_memories") or []
     if len(mems) < 2:
         return False
     merged = []
     changed = False
     for m in sorted(mems, key=lambda x: x.get("importance", 0), reverse=True):
+        if not should_retain_memory(m, player=player, threshold=28):
+            changed = True
+            continue
         dup = next((x for x in merged if _similar(x.get("story_meaning"), m.get("story_meaning"))), None)
         if dup:
             dup["importance"] = max(dup.get("importance", 0), m.get("importance", 0))
             changed = True
         else:
             merged.append(dict(m))
-    if changed:
+    if changed or len(merged) != len(mems):
         player["narrative_memories"] = merged[:40]
+        return True
     return changed
 
 

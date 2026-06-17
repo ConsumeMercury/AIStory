@@ -160,6 +160,7 @@ def select_scene_cast(present, player, action_ctx, max_focus=1):
         ), None
 
     if action_ctx.get("approach_failed"):
+        action_ctx["target_id"] = None
         return [], (
             "APPROACH FAILED — the protagonist did NOT reach the named place. "
             "Do NOT describe partial movement through a crowd or lane then snap back to "
@@ -214,6 +215,7 @@ def select_scene_cast(present, player, action_ctx, max_focus=1):
                 "Same people as the prior beat — do NOT introduce new named strangers. "
                 "ONLY the people listed below may speak; background crowd stays faceless."
             ), fid
+        action_ctx["target_id"] = None
         return [], (
             "NO MOVEMENT — the protagonist stays where they were. "
             "Do NOT describe entering new buildings, crossing districts, or meeting strangers. "

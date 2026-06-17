@@ -75,6 +75,44 @@ def record_from_beat(player, kind, action_ctx, world, *, tick=None):
     )
 
 
+def propagate_causal_pressure(player, kind, action_ctx, *, npcs=None, areas=None, tick=None):
+    """
+    After a beat, nudge district tension and focal beliefs from latest causal links.
+    Lightweight consequence propagation — not a full sim rewrite.
+    """
+    from storage import load
+
+    links = player.get("causal_links") or []
+    if not links:
+        return False
+    latest = links[0]
+    imp = int(latest.get("importance") or 0)
+    if imp < 50:
+        return False
+
+    changed = False
+    areas = areas if areas is not None else load("world/areas.json", {})
+    aid = player.get("area")
+    if aid and kind in ("investigate", "ask_about", "accuse", "confess", "attack", "blackmail"):
+        sl = (areas.get(aid, {}) or {}).get("storyline") or {}
+        if sl and imp >= 65:
+            sl["tension"] = min(100, int(sl.get("tension", 20)) + 1)
+            changed = True
+
+    ctx = action_ctx or {}
+    target_id = ctx.get("target_id")
+    if target_id and npcs and kind in ("accuse", "blackmail", "confess", "attack"):
+        npc = npcs.get(target_id)
+        if npc and npc.get("status") == "alive":
+            from simulation.belief_model import upsert_belief
+            upsert_belief(
+                npc, "outsider_is_notable", 0.08,
+                source="witnessed", tick=tick, grounding="witnessed",
+            )
+            changed = True
+    return changed
+
+
 def causality_narrator_block(player, *, limit=3):
     links = player.get("causal_links") or []
     if not links:

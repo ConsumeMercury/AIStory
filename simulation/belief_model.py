@@ -8,6 +8,13 @@ import re
 
 MAX_BELIEFS = 24
 
+GROUNDING_FROM_SOURCE = {
+    "rumor": "rumored",
+    "witnessed": "witnessed",
+    "event": "witnessed",
+    "inferred": "inferred",
+}
+
 PROPOSITION_PATTERNS = (
     ("player_is_murderer", re.compile(r"\b(murder(?:ed|s)?|killed|slain|assassin|blood)\b", re.I)),
     ("player_is_hero", re.compile(r"\b(hero|saved|rescued|brave|slew.*monster)\b", re.I)),
@@ -26,15 +33,17 @@ def get_beliefs(npc):
     return npc.setdefault("beliefs", [])
 
 
-def upsert_belief(npc, proposition, confidence_delta, *, source="rumor", tick=None, day=None):
+def upsert_belief(npc, proposition, confidence_delta, *, source="rumor", tick=None, day=None, grounding=None):
     """Add or adjust confidence for a proposition on one NPC."""
     if not proposition:
         return False
+    grounding = grounding or GROUNDING_FROM_SOURCE.get(source, "inferred")
     beliefs = get_beliefs(npc)
     for b in beliefs:
         if b.get("proposition") == proposition:
             b["confidence"] = _clamp_confidence(b.get("confidence", 0.3) + confidence_delta)
             b["source"] = source
+            b["grounding"] = _merge_grounding(b.get("grounding"), grounding)
             b["tick"] = tick
             b["day"] = day
             return True
@@ -42,11 +51,22 @@ def upsert_belief(npc, proposition, confidence_delta, *, source="rumor", tick=No
         "proposition": proposition,
         "confidence": _clamp_confidence(0.25 + confidence_delta),
         "source": source,
+        "grounding": grounding,
         "tick": tick,
         "day": day,
     })
     npc["beliefs"] = sorted(beliefs, key=lambda x: x.get("confidence", 0), reverse=True)[:MAX_BELIEFS]
     return True
+
+
+def _merge_grounding(existing, new):
+    """Stronger grounding wins: witnessed > rumored > inferred."""
+    rank = {"witnessed": 3, "rumored": 2, "inferred": 1}
+    ex = rank.get(existing, 0)
+    nw = rank.get(new, 0)
+    if nw >= ex:
+        return new
+    return existing or new
 
 
 def infer_propositions(text):
@@ -109,7 +129,8 @@ def focal_belief_block(npc_id, npcs):
     for b in beliefs:
         prop = (b.get("proposition") or "").replace("_", " ")
         conf = int(b.get("confidence", 0) * 100)
-        lines.append(f"- believes ({conf}%): {prop}")
+        grounding = b.get("grounding") or GROUNDING_FROM_SOURCE.get(b.get("source"), "inferred")
+        lines.append(f"- believes ({conf}%, {grounding}): {prop}")
     label = npc.get("name") or npc_id
     return (
         f"FOCAL BELIEFS ({label} — colors tone, do not lecture the player):\n"

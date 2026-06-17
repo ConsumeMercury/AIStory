@@ -32,12 +32,16 @@ EMOTION_BY_STRUCTURE = {
 def build_scene_objectives_block(player, kind, action_context=None, *, structure_mode=None):
     stakes = player.get("scene_stakes") or {}
     ctx = action_context or {}
-    purpose = stakes.get("purpose") or PURPOSE_BY_KIND.get(kind, "advance the moment")
+    plan = (ctx.get("beat_plan") or {}).get("scene_plan") or {}
+    purpose = stakes.get("purpose") or plan.get("intent") or PURPOSE_BY_KIND.get(kind, "advance the moment")
     question = stakes.get("dramatic_question")
     gain = stakes.get("gain")
     lose = stakes.get("lose")
 
-    emotion = EMOTION_BY_STRUCTURE.get(structure_mode or "action", "focused attention")
+    emotion = EMOTION_BY_STRUCTURE.get(
+        structure_mode or plan.get("structure_hint") or "action",
+        "focused attention",
+    )
     if ctx.get("skill_check") and not ctx["skill_check"].get("success"):
         emotion = "friction"
     if kind in ("attack", "threaten", "accuse"):
@@ -62,4 +66,9 @@ def build_scene_objectives_block(player, kind, action_context=None, *, structure
         lines.append(f"- At stake if this fails: {lose[:80]}")
     if gain:
         lines.append(f"- Possible gain: {gain[:80]}")
+    must_surface = plan.get("must_surface") or []
+    if must_surface:
+        lines.append("- Must surface (complicate or pay off):")
+        for item in must_surface[:3]:
+            lines.append(f"  • {item[:90]}")
     return "\n".join(lines)

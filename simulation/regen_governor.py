@@ -33,6 +33,11 @@ VIOLATION_PRIORITY = {
     "dialogue names place": 45,
     "investigate beat": 40,
     "too short": 10,
+    "narrative:": 45,
+    "dramatic_question": 52,
+    "story_manager block omitted": 55,
+    "stalled beat prose": 38,
+    "open narrative promises": 32,
 }
 
 

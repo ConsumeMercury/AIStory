@@ -29,13 +29,21 @@ def flush_events():
     global _event_buffer
     with _buffer_lock:
         if not _event_buffer:
-            return
-        pending = _event_buffer
-        _event_buffer = []
+            pending = []
+        else:
+            pending = _event_buffer
+            _event_buffer = []
+    if not pending:
+        return
     with state_lock():
         events = load_events()
         events.extend(pending)
         save(EVENT_FILE, events)
+    try:
+        from simulation.event_archiver import maybe_archive_events
+        maybe_archive_events()
+    except Exception:
+        pass
 
 
 def log_event(event_type, actor, action, target=None, location=None, effects=None, tick=None):

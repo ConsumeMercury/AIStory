@@ -16,7 +16,7 @@ from simulation.relationship_engine import (
 )
 from simulation.combat_engine import resolve_combat
 from simulation.storyline_engine import arc_for_city, arc_for_area
-from simulation.memory_retrieval import get_relevant_memories
+from simulation.memory_index import retrieve_memories_for_beat
 from simulation.action_interpreter import interpret_action
 from simulation.scene_coherence import (
     sync_scene_focus,
@@ -70,7 +70,8 @@ from simulation.consequence_queue import register_from_action, pop_delayed_direc
 from simulation.npc_drama import format_drama_block
 from simulation.rival_engine import bump_notoriety, maybe_spawn_rival, rival_directive
 from simulation.player_legacy import legacy_from_action, legacy_narrator_block
-from simulation.story_manager import sync_all_pipelines, record_turn_story_progress
+from simulation.story_manager import sync_all_pipelines
+from simulation.story_orchestrator import prepare_beat, finalize_beat
 from simulation.narrative_memory import record_beat_narrative_memory
 from simulation.player_reputation import build_reputation_profile
 from simulation.memory_embeddings import ingest_event_vector
@@ -251,19 +252,28 @@ def _generate_scene_with_validation(
     scene_state=None,
 ):
     """Generate scene prose; retry once when post-validation finds fact violations."""
+    curated_rumors = rank_rumors_for_narrator(
+        rumors or [],
+        player=player,
+        kind=action_ctx.get("kind"),
+        limit=5,
+        focal_npc_id=focal_id,
+        npcs=npcs,
+    )
     kwargs = dict(
         player_action=action,
         world=world,
         player=player,
         present_npcs=focus_npcs,
-        memories=get_relevant_memories(
+        memories=retrieve_memories_for_beat(
             events, action, limit=15,
             player=player, area=player.get("area"),
             focal_npc_id=focal_id,
             npcs=npcs,
             kind=action_ctx.get("kind"),
+            action_ctx=action_ctx,
         ),
-        rumors=rumors[-5:] if rumors else [],
+        rumors=curated_rumors,
         new_npcs=intro_for_scene,
         known_ids=known_ids,
         relationships=rels_toward_player,
@@ -286,16 +296,42 @@ def _generate_scene_with_validation(
     if not scene or len(scene) < 40:
         return scene, [], {}
 
-    issues, _facts, prose_issues, fact_issues, auditor_issues, auditor_meta = validate_turn_output(
-        scene,
-        player=player,
-        npcs=npcs,
-        action_ctx=action_ctx,
-        focal_npc_id=focal_id,
-        scene_place=scene_place,
-        present_npcs=focus_npcs,
-        known_ids=known_ids,
-        scene_state=scene_state,
+    from simulation.narrative_trace import (
+        validate_narrative_function,
+        narrative_issues_for_regen,
+        build_narrative_correction_block,
+        narrative_regen_mode,
+    )
+
+    def _collect_issues(raw_scene, prose_i, fact_i, auditor_i):
+        all_i, facts, prose_i, fact_i, auditor_i, auditor_meta = validate_turn_output(
+            raw_scene,
+            player=player,
+            npcs=npcs,
+            action_ctx=action_ctx,
+            focal_npc_id=focal_id,
+            scene_place=scene_place,
+            present_npcs=focus_npcs,
+            known_ids=known_ids,
+            scene_state=scene_state,
+        )
+        narrative_i = validate_narrative_function(
+            player,
+            kind=action_ctx.get("kind"),
+            action_ctx=action_ctx,
+            raw_scene=raw_scene,
+            structure_mode=action_ctx.get("structure_mode"),
+            focal_npc_id=focal_id,
+        )
+        action_ctx["narrative_issues"] = narrative_i
+        action_ctx["narrative_regen_mode"] = narrative_regen_mode()
+        regen_narr = narrative_issues_for_regen(narrative_i, kind=action_ctx.get("kind"))
+        if regen_narr:
+            all_i = list(all_i) + regen_narr
+        return all_i, facts, prose_i, fact_i, auditor_i, auditor_meta, narrative_i
+
+    issues, _facts, prose_issues, fact_issues, auditor_issues, auditor_meta, narrative_issues = _collect_issues(
+        scene, [], [], [],
     )
     from simulation.regen_governor import apply_regen_governor
     attempt = 0
@@ -312,21 +348,16 @@ def _generate_scene_with_validation(
         correction = build_combined_correction_block(
             prose_issues, fact_issues, auditor_issues,
         )
+        narrative_corr = build_narrative_correction_block(narrative_issues)
+        if narrative_corr:
+            correction = (correction + "\n\n" + narrative_corr).strip() if correction else narrative_corr
         merged = ((extra_directive or "") + "\n\n" + correction).strip()
         action_ctx["prose_retry"] = attempt
         scene = get_narrator().generate_scene(
             **{**kwargs, "extra_directive": merged, "on_prose_chunk": None},
         )
-        issues, _facts, prose_issues, fact_issues, auditor_issues, auditor_meta = validate_turn_output(
-            scene,
-            player=player,
-            npcs=npcs,
-            action_ctx=action_ctx,
-            focal_npc_id=focal_id,
-            scene_place=scene_place,
-            present_npcs=focus_npcs,
-            known_ids=known_ids,
-            scene_state=scene_state,
+        issues, _facts, prose_issues, fact_issues, auditor_issues, auditor_meta, narrative_issues = _collect_issues(
+            scene, [], [], [],
         )
 
     if issues:
@@ -362,6 +393,7 @@ def _generate_scene_with_validation(
             save(PLAYER_FILE, pl)
 
     from simulation.boundary_metrics import build_output_boundary
+    from simulation.validator_chain import build_validator_chain_trace
     output_boundary = build_output_boundary(
         kind=(action_ctx or {}).get("kind"),
         action_ctx=action_ctx,
@@ -377,6 +409,14 @@ def _generate_scene_with_validation(
     output_boundary["prose_issues"] = list(prose_issues or [])
     output_boundary["fact_issues"] = list(fact_issues or [])
     output_boundary["auditor_issues"] = list(auditor_issues or [])
+    output_boundary["narrative_issues"] = list(narrative_issues or [])
+    action_ctx["validator_chain"] = build_validator_chain_trace(
+        prose_issues=prose_issues,
+        fact_issues=fact_issues,
+        auditor_issues=auditor_issues,
+        narrative_issues=narrative_issues,
+        action_ctx=action_ctx,
+    )
     return scene, issues, output_boundary
 
 
@@ -1193,8 +1233,8 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
     areas_story = load(AREAS_FILE, {})
     with state_lock():
         player = load(PLAYER_FILE, {})
-        record_turn_story_progress(
-            player, kind=kind, action_ctx=action_ctx, areas=areas_story, npcs=npcs,
+        prepare_beat(
+            player, kind=kind, action_ctx=action_ctx, areas=areas_story, npcs=npcs, tick=tick,
         )
         if tick % 5 == 0 or not player.get("reputation_profile"):
             build_reputation_profile(player)
@@ -1336,6 +1376,11 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
         action_ctx["story_directive"] = (
             action_ctx.get("story_directive", "") + " " + interrogate
         ).strip()
+
+    plan = action_ctx.get("beat_plan") or {}
+    obligation = (plan.get("scene_plan") or {}).get("obligation")
+    if obligation:
+        extra_directive = ((extra_directive or "") + " " + obligation).strip()
 
     hard_constraints = build_hard_constraints_block(
         focal_id, focal_npc, scene_place, action_ctx, present=present, npcs=npcs,
@@ -1534,6 +1579,15 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
                 player, scene, tick=tick, kind=kind, action_ctx=action_ctx,
             )
         maybe_consolidate_player_memories(player, tick=tick)
+        finalize_beat(
+            player, kind=kind, action_ctx=action_ctx, npcs=npcs, areas=areas_story, tick=tick,
+        )
+        if tick and tick % 50 == 0:
+            try:
+                from simulation.event_archiver import maybe_archive_events
+                maybe_archive_events(tick=tick)
+            except Exception:
+                pass
         journal = player.get("journal") or []
         player["journal"] = journal[-300:]
         save(PLAYER_FILE, player)

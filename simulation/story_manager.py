@@ -201,33 +201,19 @@ def build_story_manager_block(player, npcs=None, *, focal_npc_id=None, kind="gen
 
 def npc_simulation_weights(player, npcs, *, areas=None, institutions=None):
     """Relative tick weights — story-relevant and nearby NPCs sim more often."""
+    from simulation.importance_router import score_npc
+
     areas = areas if areas is not None else load(AREAS_FILE, {})
     institutions = institutions or load(INST_FILE, {})
     primary = get_primary_arc(player, npcs, areas=areas)
-    key_ids = set(primary.get("key_npc_ids") or []) if primary else set()
     player_area = player.get("area")
     player_city = player.get("location")
-    focus = player.get("scene_focus")
 
     weights = {}
     for nid, npc in (npcs or {}).items():
         if npc.get("status") != "alive":
             continue
-        w = 1.0
-        if npc.get("area") == player_area:
-            w += 5.0
-        elif npc.get("location") == player_city:
-            w += 2.0
-        if nid in key_ids:
-            w += 8.0
-        if nid == focus:
-            w += 6.0
-        inst = npc.get("institution") or {}
-        if inst.get("rank") in ("leader", "master", "captain", "high priest"):
-            w += 3.0
-        if (npc.get("personal_objective") or {}).get("text"):
-            w += 1.5
-        # Regional simulation tiers — player district full weight, same city partial, far minimal
+        w = score_npc(npc, player=player, arc=primary, institutions=institutions, npc_id=nid)
         if player_area and npc.get("area") == player_area:
             w *= 1.0
         elif player_city and npc.get("location") == player_city:
@@ -257,6 +243,102 @@ def weighted_npc_sample(npc_ids, weights, k):
         chosen.append(pick)
         pool.remove(pick)
     return chosen
+
+
+_STORY_FORWARD_KINDS = frozenset({
+    "investigate", "ask_about", "accuse", "find", "search", "attack", "blackmail",
+})
+
+
+def get_arc_state(player):
+    return player.setdefault("story_arc_state", {})
+
+
+def sync_arc_state(player, arc):
+    if not arc:
+        return
+    state = get_arc_state(player)
+    aid = arc.get("arc_id")
+    if state.get("arc_id") != aid:
+        state.clear()
+        state["arc_id"] = aid
+        state["stage"] = int(arc.get("stage") or 0)
+        state["beats"] = 0
+
+
+def maybe_advance_arc_stage(player, *, kind, action_ctx, areas=None, npcs=None):
+    """Advance investigation or district arc stage on meaningful successful beats."""
+    areas = areas if areas is not None else load(AREAS_FILE, {})
+    arc = get_primary_arc(player, npcs, areas=areas)
+    if not arc:
+        return False
+    sync_arc_state(player, arc)
+    state = get_arc_state(player)
+    ctx = action_ctx or {}
+    check = ctx.get("skill_check") or {}
+    success = check.get("success", True)
+    if kind not in _STORY_FORWARD_KINDS:
+        return False
+
+    state["beats"] = int(state.get("beats") or 0) + 1
+    advanced = False
+
+    case = player.get("active_case")
+    if case and not case.get("solved") and arc.get("kind") == "investigation":
+        stages = case.get("stages") or []
+        cur = int(case.get("stage") or 0)
+        if kind in ("investigate", "find", "search") and success and state["beats"] % 3 == 0:
+            nxt = min(cur + 1, max(0, len(stages) - 1))
+            if nxt != cur:
+                case["stage"] = nxt
+                state["stage"] = nxt
+                advanced = True
+        elif kind == "accuse" and success and cur < max(0, len(stages) - 1):
+            case["stage"] = min(cur + 1, len(stages) - 1)
+            state["stage"] = case["stage"]
+            advanced = True
+
+    aid = player.get("area")
+    if aid and arc.get("kind") in ("district", "investigation"):
+        area = areas.get(aid, {})
+        sl = area.get("storyline") or {}
+        stages = sl.get("stages") or []
+        if stages:
+            tension = int(sl.get("tension") or 0)
+            cur = int(state.get("stage") or sl.get("stage") or 0)
+            threshold = 30 + cur * 22
+            if tension >= threshold and cur < len(stages) - 1:
+                nxt = cur + 1
+                sl["stage"] = nxt
+                sl["current"] = stages[nxt]
+                state["stage"] = nxt
+                sync_starting_pipeline_from_area(player, aid, areas)
+                advanced = True
+
+    if advanced:
+        player["story_arc_state"] = state
+    return advanced
+
+
+def beat_obligation_directive(player, kind, action_ctx=None, *, npcs=None, areas=None):
+    """Narrator directive tying beat to active arc obligations."""
+    if kind in ("wait", "rest", "withdraw", "ask_name", "meta"):
+        return ""
+    arc = get_primary_arc(player, npcs, areas=areas)
+    stakes = player.get("scene_stakes") or {}
+    state = player.get("story_arc_state") or {}
+    if not arc and not stakes.get("dramatic_question"):
+        return ""
+    lines = []
+    q = stakes.get("dramatic_question")
+    if q:
+        lines.append(f"THIS BEAT MUST complicate or answer: {q[:100]}")
+    if arc and arc.get("next_beat"):
+        lines.append(f"Pressure toward: {str(arc['next_beat'])[:80]}")
+    stage = state.get("stage", arc.get("stage", 0) if arc else 0)
+    if stage and kind in _STORY_FORWARD_KINDS:
+        lines.append(f"Arc stage {int(stage) + 1} — do not reset prior discovery.")
+    return " ".join(lines)
 
 
 def record_turn_story_progress(player, *, kind, action_ctx, areas=None, npcs=None):
@@ -365,6 +447,8 @@ def record_turn_story_progress(player, *, kind, action_ctx, areas=None, npcs=Non
     if bump:
         sl["tension"] = min(100, int(sl.get("tension", 20)) + bump)
         sync_starting_pipeline_from_area(player, aid, areas)
+
+    maybe_advance_arc_stage(player, kind=kind, action_ctx=ctx, areas=areas, npcs=npcs)
 
 
 def nudge_area_storyline_on_advance(area_id, areas, player=None):

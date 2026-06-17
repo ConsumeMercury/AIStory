@@ -496,8 +496,14 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
         has_journal=has_journal,
         profile=profile,
     )
+    profile_rows, profile_total = profile_prompt_sections(sections, label="assemble_scene_prompt")
+    if action_context is not None:
+        action_context["prompt_profile"] = {
+            "est_tokens": profile_total,
+            "modules": profile_rows[:14],
+        }
     if DEBUG_TOKENS:
-        profile_prompt_sections(sections, label="assemble_scene_prompt")
+        pass  # profile_prompt_sections already logged when DEBUG_TOKENS
     conflicts = validate_directives(prompt)
     if action_context is not None and conflicts:
         action_context["directive_conflicts"] = conflicts[:4]

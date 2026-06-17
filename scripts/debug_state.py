@@ -93,8 +93,28 @@ def cmd_boundary():
             "structure_mode": narrative.get("structure_mode"),
             "promises_open": narrative.get("promises_open"),
             "narrator_block_count": narrative.get("narrator_block_count"),
+            "arc_stage": narrative.get("arc_stage") or narrative.get("beat_plan_arc_stage"),
+            "regen_mode": narrative.get("regen_mode"),
             "last_issues": (last_trace or {}).get("narrative_issues") or [],
         }
+    beat_plan = (last_trace or {}).get("beat_plan") or {}
+    if beat_plan:
+        payload["beat_plan"] = beat_plan
+    orchestrator = (last_trace or {}).get("orchestrator") or {}
+    if orchestrator:
+        payload["orchestrator"] = orchestrator
+    prompt_profile = (last_trace or {}).get("prompt_profile") or {}
+    if prompt_profile:
+        payload["prompt_profile"] = {
+            "est_tokens": prompt_profile.get("est_tokens"),
+            "top_modules": [
+                {"name": m.get("name"), "est_tokens": m.get("est_tokens")}
+                for m in (prompt_profile.get("modules") or [])[:8]
+            ],
+        }
+    validator_chain = (last_trace or {}).get("validator_chain") or []
+    if validator_chain:
+        payload["validator_chain"] = validator_chain
     _print_json(payload)
 
 

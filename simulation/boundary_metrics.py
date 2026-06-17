@@ -456,6 +456,14 @@ def persist_boundary_trace(
         "scheduled_events_pending": len(list_pending_events(player, player.get("area"))),
         "narrative": ctx.get("narrative_trace") or {},
         "narrative_issues": list(ctx.get("narrative_issues") or [])[:8],
+        "beat_plan": {
+            "arc_id": (ctx.get("beat_plan") or {}).get("arc_id"),
+            "arc_stage": (ctx.get("beat_plan") or {}).get("arc_stage"),
+            "dramatic_question": ((ctx.get("beat_plan") or {}).get("dramatic_question") or "")[:80],
+        } if ctx.get("beat_plan") else {},
+        "orchestrator": ctx.get("story_orchestrator") or {},
+        "prompt_profile": (ctx.get("prompt_profile") or {}) if isinstance(ctx.get("prompt_profile"), dict) else {},
+        "validator_chain": list(ctx.get("validator_chain") or [])[:8],
     }
     player["last_boundary_trace"] = detail
     hist = player.setdefault("boundary_history", [])

@@ -107,6 +107,7 @@ def _reset_player_baseline():
     player.pop("boundary_session", None)
     player.pop("scene_cast", None)
     player.pop("narrator_items", None)
+    player.pop("story_arc_state", None)
     stats = player.setdefault("stats", {})
     stats.setdefault("max_health", stats.get("health", 100))
     stats.setdefault("max_stamina", stats.get("stamina", 30))
