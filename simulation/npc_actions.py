@@ -12,6 +12,7 @@ Personality biases choice but never forces it (weighted random), so the
 same NPC behaves differently day to day — the "natural, not scripted" feel.
 """
 
+import logging
 import random
 
 from storage import load, save
@@ -36,6 +37,8 @@ WORLD_FILE = "world/world_state.json"
 AREAS_FILE = "world/areas.json"
 INST_FILE = "world/institutions.json"
 PLAYER_FILE = "player/player.json"
+
+log = logging.getLogger(__name__)
 
 
 _ROLE_BIAS = {
@@ -252,7 +255,7 @@ def simulate_npcs(tick=None):
         try:
             check_goal_progress(npc, action)
         except Exception:
-            pass
+            log.exception("goal progress check failed for npc %s action %s", npc_id, action)
 
         if action == "trade":
             npc["wealth"] = npc.get("wealth", 0) + random.randint(1, 10)
@@ -309,9 +312,7 @@ def simulate_npcs(tick=None):
                     npc["location"] = random.choice(connected)
                     effects.append("npc_travelled")
             except Exception:
-                pass
-
-        # earned progression + recovery
+                log.exception("npc travel failed for %s", npc_id)
         if train_from_action(npc, action):
             effects.append("skill_levelled")
         _heal_tick(npc)

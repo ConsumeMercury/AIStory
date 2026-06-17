@@ -41,11 +41,11 @@ def find_directive_conflicts(prompt_text):
 
 
 def validate_directives(prompt_text):
-    """Log conflicts at debug level; return issues for telemetry."""
+    """Log conflicts at warning level; return issues for telemetry."""
     issues = find_directive_conflicts(prompt_text)
     if issues:
         import logging
         log = logging.getLogger(__name__)
         for issue in issues[:4]:
-            log.debug("Directive conflict: %s", issue)
+            log.warning("Directive conflict: %s", issue)
     return issues

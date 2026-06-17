@@ -197,12 +197,19 @@ def test_storyline_catalog():
 
 
 def test_llm_content_validators():
+    import os
+    from unittest.mock import patch
+
     from generation.llm_content import (
         ai_worldgen_enabled,
         validate_storyline_spec,
     )
 
-    assert ai_worldgen_enabled() is False
+    env = {k: v for k, v in os.environ.items() if k not in (
+        "AISTORY_AI_WORLDGEN", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+    )}
+    with patch.dict(os.environ, env, clear=True):
+        assert ai_worldgen_enabled() is False
     ok, cleaned, _ = validate_storyline_spec({
         "title": "Test Arc",
         "theme": "intrigue",

@@ -3,6 +3,7 @@ Detect ambiguous NPC targeting before mechanics run.
 Simulation asks for clarification instead of guessing present[0].
 """
 
+import logging
 import re
 
 from generation.descriptor_generator import short_descriptor
@@ -11,6 +12,8 @@ from simulation.target_resolution import (
     action_mentions_role_or_descriptor,
     find_npc_by_name_in_text,
 )
+
+log = logging.getLogger(__name__)
 
 _CLARIFY_KINDS = frozenset(TARGET_KINDS) | frozenset({"find"})
 
@@ -31,7 +34,7 @@ def collect_description_matches(action, present):
                     hits.append(npc)
                     seen.add(npc["id"])
             except Exception:
-                continue
+                log.debug("description match failed for npc %s", npc.get("id"), exc_info=True)
     return hits
 
 

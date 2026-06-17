@@ -501,7 +501,9 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
     )
     if DEBUG_TOKENS:
         profile_prompt_sections(section_map, label="assemble_scene_prompt")
-    validate_directives(prompt)
+    conflicts = validate_directives(prompt)
+    if action_context is not None and conflicts:
+        action_context["directive_conflicts"] = conflicts[:4]
     return prompt, token_budget, focal_npc_id, memory_debug
 
 

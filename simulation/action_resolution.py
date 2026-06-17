@@ -3,12 +3,15 @@ Hard-logic resolution for combat targets, item pickup, explore hooks, and confes
 Simulation decides facts; the narrator renders them.
 """
 
+import logging
 import re
 
 from generation.descriptor_generator import short_descriptor, appearance_notes, gender_label
 from generation.item_generator import generate_item
 from simulation.item_engine import resolve_loot_to_player, equip_item, ensure_equipment
 from simulation.target_resolution import find_npc_by_name_in_text
+
+log = logging.getLogger(__name__)
 
 _ACQUIRE_VERBS = re.compile(
     r"\b(find|look for|search for|take|pick up|pickup|grab|loot|strip|pull)\b", re.I,
@@ -86,7 +89,7 @@ def match_npc_by_description(action, present, player=None):
                 if matcher(n):
                     scores[n["id"]] = scores.get(n["id"], 0) + 1
             except Exception:
-                continue
+                log.debug("description matcher failed for npc %s", n.get("id"), exc_info=True)
     if scores:
         best = max(scores.values())
         top_ids = [nid for nid, score in scores.items() if score == best]
@@ -346,7 +349,7 @@ def try_acquire_item(action, player, area, tick, skill_success=True):
         "category": item.get("category"),
         "rarity": item.get("rarity"),
     }
-    player.setdefault("last_acquired_item", action_ctx_item)
+    player["last_acquired_item"] = action_ctx_item
     return directive, item
 
 
@@ -361,7 +364,7 @@ def resolve_find_person(action, player, present, npcs):
                         if matcher(n):
                             hits.append(n)
                     except Exception:
-                        continue
+                        log.debug("find-person matcher failed for npc %s", n.get("id"), exc_info=True)
                 if len(hits) == 1:
                     return hits[0]
                 if len(hits) > 1:

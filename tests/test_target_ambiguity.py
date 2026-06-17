@@ -76,6 +76,24 @@ def test_collect_description_matches_two_guards():
     assert len(hits) == 2
 
 
+def test_collect_name_matches_two_known_names():
+    from simulation.target_ambiguity import collect_name_matches
+
+    present = [
+        {"id": "a", "status": "alive", "gender": "female", "name": "Zaim Suleima", "role": "scholar", "appearance": {}},
+        {"id": "b", "status": "alive", "gender": "female", "name": "Valena Karim", "role": "soldier", "appearance": {}},
+    ]
+    player = {"scene_focus": None, "known_npcs": {"a": {"name_known": True}, "b": {"name_known": True}}}
+    npcs = {n["id"]: n for n in present}
+    hits = collect_name_matches(
+        "ask Zaim Suleima and Valena Karim about the ledger",
+        npcs,
+        player,
+        {n["id"] for n in present},
+    )
+    assert len(hits) == 2
+
+
 def test_pending_clarification_stores_original_action():
     present = [
         {"id": "a", "status": "alive", "gender": "female", "name": "Zaim Suleima", "role": "scholar", "appearance": {}},

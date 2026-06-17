@@ -2,9 +2,12 @@
 Storyline advancement — institution arcs + per-district plots.
 """
 
+import logging
 import random
 from storage import load, save
 from simulation.event_logger import log_event
+
+log = logging.getLogger(__name__)
 
 INST_FILE = "world/institutions.json"
 AREAS_FILE = "world/areas.json"
@@ -90,9 +93,7 @@ def advance_storylines(tick=None):
                     if sync_starting_pipeline_from_area(player, aid, areas):
                         _save("player/player.json", player)
                 except Exception:
-                    pass
-
-    if changed:
+                    log.exception("starting pipeline sync failed for area %s", aid)
         save("rumors/rumors.json", rumors[-200:])
     save(INST_FILE, institutions)
     save(AREAS_FILE, areas)

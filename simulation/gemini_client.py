@@ -187,6 +187,7 @@ def _visible_prose_for_truncation_check(text):
         from simulation.narrator_facts import strip_narrator_facts
         return strip_narrator_facts(text or "")
     except Exception:
+        log.debug("strip_narrator_facts failed during truncation check", exc_info=True)
         return (text or "").strip()
 
 

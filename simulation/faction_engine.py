@@ -1,6 +1,9 @@
 import json
+import logging
 import random
 import os
+
+log = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -13,6 +16,7 @@ def run_faction_tick(tick=None):
         with open(config_path, "r") as f:
             config = json.load(f)
     except Exception:
+        log.warning("faction config load failed; using defaults", exc_info=True)
         config = {}
 
     if not config.get("enable_faction_wars", True):
@@ -24,9 +28,8 @@ def run_faction_tick(tick=None):
         with open(factions_path, "r") as f:
             factions = json.load(f)
     except Exception:
+        log.warning("factions.json load failed; skipping faction tick", exc_info=True)
         return
-
-    # factions stored as dict
     if not isinstance(factions, dict):
         return
 
@@ -61,11 +64,11 @@ def run_faction_tick(tick=None):
                         tick=tick,
                     )
                 except Exception:
-                    pass
+                    log.exception("faction conflict event log failed")
 
     # save back
     try:
         with open(factions_path, "w") as f:
             json.dump(factions, f, indent=2)
     except Exception:
-        pass
+        log.exception("factions.json save failed")
