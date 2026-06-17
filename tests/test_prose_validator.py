@@ -86,6 +86,23 @@ def test_build_prose_correction_block():
     assert "Wrong role" in block
 
 
+def test_role_mismatch_ignores_vocative_in_quotes():
+    from simulation.prose_validator import role_mismatch
+
+    text = (
+        '"Zamun," he says, his gaze lifting to meet yours. '
+        '"Not Man. If you are going to ask questions in the dark, soldier, use my name."'
+    )
+    assert role_mismatch(text, "merchant", "male") is None
+
+
+def test_role_mismatch_flags_narrator_role_drift():
+    from simulation.prose_validator import role_mismatch
+
+    text = "He steps forward, a soldier's stance in his shoulders, and watches you."
+    assert role_mismatch(text, "merchant", "male") is not None
+
+
 def test_log_scene_prose_issues_warns_but_does_not_raise(caplog):
     npcs = {"p1": _npc("p1")}
     player = {"scene_focus": "p1", "known_npcs": {"p1": {"name_known": True}}}

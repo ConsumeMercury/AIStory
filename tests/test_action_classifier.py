@@ -99,3 +99,27 @@ def test_classifier_failure_surfaces_error(monkeypatch):
 
 def test_classifier_off_by_default():
     assert classifier_mode() == "off" or os.environ.get("AISTORY_ACTION_CLASSIFIER")
+
+
+def test_classifier_uses_structured_json_token_cap(monkeypatch):
+    monkeypatch.setenv("AISTORY_ACTION_CLASSIFIER", "shadow")
+    monkeypatch.setenv("GEMINI_MAX_OUTPUT_TOKENS", "8192")
+    seen = {}
+
+    def _capture_llm(prompt, **kwargs):
+        seen.update(kwargs)
+        return '{"kind":"talk","target_id":"g1","player_speech":null,"time_target":null}'
+
+    monkeypatch.setattr("simulation.gemini_client.generate_text", _capture_llm)
+    scene = _scene("g1")
+    ctx = {"kind": "general", "target_id": None, "player_speech": None}
+    apply_classifier_to_ctx(
+        "ask the guard about the toll",
+        {"known_npcs": {}},
+        list(scene.cast),
+        {"g1": scene.cast[0]},
+        ctx,
+        scene,
+    )
+    assert seen.get("max_tokens", 0) >= 2048
+    assert seen.get("json_output") is True

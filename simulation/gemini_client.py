@@ -38,6 +38,11 @@ def get_max_output_tokens():
     return DEFAULT_MAX_OUTPUT_TOKENS
 
 
+def structured_json_max_tokens(*, floor=2048, ceiling=8192):
+    """Token cap for compact JSON LLM calls (classifier, auditor)."""
+    return max(floor, min(get_max_output_tokens(), ceiling))
+
+
 def require_api_key():
     key = api_key()
     if not key:

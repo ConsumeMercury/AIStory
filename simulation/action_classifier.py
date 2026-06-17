@@ -163,13 +163,13 @@ def classify_action_llm(action, scene, player, regex_ctx):
     if not needs_llm_classifier(action, regex_ctx, scene):
         return None, None
     try:
-        from simulation.gemini_client import generate_text
+        from simulation.gemini_client import generate_text, structured_json_max_tokens
         prompt = _build_prompt(action, scene, player, regex_ctx)
         text = generate_text(
             prompt,
             temperature=0.15,
             top_p=0.9,
-            max_tokens=512,
+            max_tokens=structured_json_max_tokens(),
             json_output=True,
         )
         if not (text or "").strip():

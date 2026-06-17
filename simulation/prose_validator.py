@@ -135,6 +135,11 @@ def gender_mismatch(text, gender):
     return None
 
 
+def _narrative_outside_quotes(sentence):
+    """Strip quoted dialogue — role words there may address the player, not describe the focal NPC."""
+    return re.sub(r'"[^"]*"', " ", sentence or "")
+
+
 def role_mismatch(text, role, gender, *, allow_roles=()):
     if not role:
         return None
@@ -142,18 +147,19 @@ def role_mismatch(text, role, gender, *, allow_roles=()):
     focal_words = _ROLE_WORDS.get(role, (role,))
     pron = _focal_pronoun_pattern(gender)
     for sent in re.split(r"(?<=[.!?])\s+", text):
-        lower = sent.lower()
         if not pron.search(sent):
             continue
+        narrative = _narrative_outside_quotes(sent)
+        lower = narrative.lower()
         if role in lower or any(w in lower for w in focal_words):
             continue
-        if re.match(r"^\s*You\b", sent) and re.search(r"\bguards?\b", lower):
+        if re.match(r"^\s*You\b", narrative) and re.search(r"\bguards?\b", lower):
             continue
         for wrong_role, words in _ROLE_WORDS.items():
             if wrong_role == role or wrong_role in allowed:
                 continue
-            if wrong_role == "guard" and _AMBIENT_GUARD.search(sent):
-                if not _FOCAL_ROLE_MISLABEL.search(sent):
+            if wrong_role == "guard" and _AMBIENT_GUARD.search(narrative):
+                if not _FOCAL_ROLE_MISLABEL.search(narrative):
                     continue
             if any(re.search(rf"\b{re.escape(w)}\b", lower) for w in words):
                 return f"focal role is {role} but prose uses {wrong_role} imagery"
@@ -398,6 +404,18 @@ def build_prose_correction_block(issues):
     ]
     for issue in issues[:8]:
         lines.append(f"- {issue}")
+        m = re.search(
+            r"focal role is (\w+) but prose uses (\w+) imagery",
+            issue or "",
+            re.I,
+        )
+        if m:
+            role, wrong = m.group(1), m.group(2)
+            lines.append(
+                f"  → The focal NPC is a {role.upper()}, NOT a {wrong}. "
+                f"Remove all {wrong}/soldier/combat/borderland/threat imagery applied to them; "
+                f"describe trade, craft, stall, or work befitting a {role}."
+            )
     lines.append(
         "- Obey SCENE FACTS, HARD CONSTRAINTS, and WHO IS HERE. "
         "Do not invent guards, priests, or new speakers not listed as PRESENT."

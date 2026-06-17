@@ -119,6 +119,11 @@ def test_regen_governor_respects_priority():
     assert not issues_warrant_regen(low, 0)
 
 
+def test_regen_governor_warrants_role_imagery_fix():
+    issues = ["focal role is merchant but prose uses guard imagery"]
+    assert issues_warrant_regen(issues, 0)
+
+
 def test_regen_governor_max_attempts():
     issues = ["AUDITOR CONFIRMED: speaker 'x' not in scene cast"]
     _, should_retry, meta = apply_regen_governor(issues, attempt=99)

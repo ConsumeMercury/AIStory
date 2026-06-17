@@ -165,7 +165,7 @@ def audit_prose_llm(
     if mock:
         return _parse_auditor_json(mock)
     try:
-        from simulation.gemini_client import generate_text
+        from simulation.gemini_client import generate_text, structured_json_max_tokens
         prompt = _build_audit_prompt(
             text, player, npcs, scene_state, action_ctx,
             focal_npc_id, scene_place, present_npcs,
@@ -174,7 +174,7 @@ def audit_prose_llm(
             prompt,
             temperature=0.1,
             top_p=0.85,
-            max_tokens=1024,
+            max_tokens=structured_json_max_tokens(),
             json_output=True,
         )
         return _parse_auditor_json(raw)

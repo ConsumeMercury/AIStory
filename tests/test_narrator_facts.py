@@ -49,3 +49,17 @@ def test_validate_speaking_not_in_cast():
     facts = {"speaking": ["stranger"], "death": [], "places": [], "schedules": []}
     issues = validate_narrator_facts(facts, {}, {}, scene, {}, "g1")
     assert any("not in scene cast" in i for i in issues)
+
+
+def test_dialogue_place_fact_gap():
+    from simulation.narrator_facts import dialogue_place_fact_gap
+
+    scene = (
+        'The priest whispers, "Meet me at the customs house before dawn."\n'
+        "[FACT: speaking | g1]\n"
+    )
+    facts = parse_narrator_facts(scene)
+    gap = dialogue_place_fact_gap(scene, facts)
+    assert gap is not None
+    assert "customs house" in gap.lower()
+    assert "[FACT: place" in gap or "place" in gap.lower()

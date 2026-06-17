@@ -74,7 +74,8 @@ def build_fact_emission_block(scene_state=None):
         "STRUCTURED FACTS (simulation tags — stripped from player prose; declare alongside story):",
         "- Who speaks with named dialogue: [FACT: speaking | npc_id] per speaker in cast",
         "- If prose implies an NPC died who is alive in SCENE FACTS: [FACT: death | npc_id]",
-        "- If naming a specific go-to place: [FACT: place | place_name]",
+        "- If naming a specific go-to place (move target OR place named in NPC dialogue): "
+        "[FACT: place | place_name]",
         "- Timed promises: [SCHEDULE: event_id | label | +Nh] (required for WHEN commitments)",
         "Use real cast ids from SCENE FACTS only — never invent ids in tags.",
     ]
@@ -138,6 +139,34 @@ def validate_narrator_facts(facts, player, npcs, scene_state, action_ctx, focal_
             )
 
     return issues
+
+
+def dialogue_place_fact_gap(text, facts):
+    """Flag when prose names navigable places but no [FACT: place] tags were emitted."""
+    from simulation.local_places import extract_narrator_destinations
+
+    extracted = extract_narrator_destinations(text)
+    if not extracted:
+        return None
+    tagged = {(p or "").lower() for p in (facts or {}).get("places") or []}
+    untagged = []
+    for rec in extracted:
+        label = (rec.get("label") or "").strip()
+        key = label.lower()
+        if not label:
+            continue
+        if key in tagged:
+            continue
+        if any(key in t or t in key for t in tagged):
+            continue
+        untagged.append(label)
+    if not untagged:
+        return None
+    names = ", ".join(untagged[:3])
+    return (
+        f"prose names place(s) ({names}) "
+        "but no [FACT: place | place_name] tag emitted"
+    )
 
 
 def build_fact_correction_block(issues):

@@ -2,7 +2,11 @@
 Uniform post-generation gate — regex prose + structured facts + AI auditor nominations.
 """
 
-from simulation.narrator_facts import parse_narrator_facts, validate_narrator_facts
+from simulation.narrator_facts import (
+    dialogue_place_fact_gap,
+    parse_narrator_facts,
+    validate_narrator_facts,
+)
 from simulation.prose_validator import (
     build_prose_correction_block,
     validate_scene_prose,
@@ -60,6 +64,9 @@ def validate_turn_output(
     schedule_issue = validate_schedule_emission(text)
     if schedule_issue:
         fact_issues = list(fact_issues) + [schedule_issue]
+    place_gap = dialogue_place_fact_gap(text, facts)
+    if place_gap:
+        fact_issues = list(fact_issues) + [place_gap]
 
     auditor_confirmed, auditor_meta = run_prose_audit(
         text,

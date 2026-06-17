@@ -23,6 +23,9 @@ VIOLATION_PRIORITY = {
     "auditor confirmed: item": 65,
     "movement": 60,
     "focal npc not": 50,
+    "focal role is": 55,
+    "prose uses": 55,
+    " imagery": 55,
     "investigate beat": 40,
     "too short": 10,
 }
