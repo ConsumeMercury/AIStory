@@ -26,6 +26,8 @@ def test_prepare_beat_writes_plan_on_action_ctx():
     assert "Bessa" in plan["memory_query"] or "crates" in plan["memory_query"]
     assert player.get("scene_stakes", {}).get("dramatic_question")
     assert ctx.get("story_orchestrator", {}).get("arc_id")
+    assert player.get("sim_priorities", {}).get("priority_npc_ids")
+    assert plan.get("sim_priorities")
 
 
 def test_memory_index_uses_beat_plan_query():

@@ -57,21 +57,28 @@ def _goal_npc_boost(npc, player, action_kind):
 
 def _score_npc(npc, player, action_ctx, known, institutions=None):
     """Higher = more likely to be the scene's focus."""
-    score = 0.0
+    from simulation.importance_router import score_npc as router_score
+    from simulation.story_manager import get_primary_arc
+
     nid = npc["id"]
     tid = action_ctx.get("target_id")
+    score = float(router_score(
+        npc, player=player,
+        arc=get_primary_arc(player),
+        institutions=institutions or {},
+        npc_id=nid,
+    ))
     if tid == nid:
         score += 100
     elif not tid and player.get("scene_focus") == nid:
-        score += 80
+        score += 30
     if npc.get("key_npc"):
-        score += 45
-    if known.get(nid, {}).get("name_known"):
-        score += 60
-    if known.get(nid, {}).get("seen_before"):
         score += 20
+    if known.get(nid, {}).get("name_known"):
+        score += 40
+    if known.get(nid, {}).get("seen_before"):
+        score += 12
     score += _institution_boost(npc, player.get("area"), institutions or {})
-    # age proximity for social actions
     if action_ctx.get("kind") in (
         "talk", "ask_name", "personal_talk", "help", "give",
         "threaten", "insult", "show_respect", "find", "confess", "attack",
@@ -83,6 +90,13 @@ def _score_npc(npc, player, action_ctx, known, institutions=None):
             score += 8
         score += npc.get("physique", {}).get("presentation", 50) * 0.1
     score += _goal_npc_boost(npc, player, action_ctx.get("kind", ""))
+
+    plan = action_ctx.get("beat_plan") or {}
+    priority = plan.get("priority_npc_ids") or []
+    if nid in priority:
+        rank = priority.index(nid)
+        score += max(20, 55 - rank * 8)
+
     return score
 
 

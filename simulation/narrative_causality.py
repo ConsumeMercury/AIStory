@@ -110,6 +110,14 @@ def propagate_causal_pressure(player, kind, action_ctx, *, npcs=None, areas=None
                 source="witnessed", tick=tick, grounding="witnessed",
             )
             changed = True
+
+    links = player.get("causal_links") or []
+    if links:
+        from simulation.consequence_cascade import register_from_causal_link
+        from storage import load as _load
+        world_state = _load("world/world_state.json", {})
+        if register_from_causal_link(player, links[0], world=world_state, areas=areas):
+            changed = True
     return changed
 
 

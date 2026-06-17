@@ -92,12 +92,15 @@ def maybe_archive_events(*, tick=None, force=False):
         rumors = load(RUMOR_FILE, [])
         protected = _protected_event_ids(rumors)
 
+        from simulation.importance_router import score_event
+
+        player = load("player/player.json", {})
         candidates = []
         for idx, event in enumerate(events):
             eid = event.get("id")
             if eid and eid in protected:
                 continue
-            imp = int(event.get("importance") or 30)
+            imp = score_event(event, player=player if player else None)
             candidates.append((imp, idx, event))
 
         candidates.sort(key=lambda row: (row[0], row[1]))

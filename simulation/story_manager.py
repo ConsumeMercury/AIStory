@@ -202,10 +202,14 @@ def build_story_manager_block(player, npcs=None, *, focal_npc_id=None, kind="gen
 def npc_simulation_weights(player, npcs, *, areas=None, institutions=None):
     """Relative tick weights — story-relevant and nearby NPCs sim more often."""
     from simulation.importance_router import score_npc
+    from simulation.sim_priorities import build_sim_priorities, npc_tick_multiplier
 
     areas = areas if areas is not None else load(AREAS_FILE, {})
     institutions = institutions or load(INST_FILE, {})
     primary = get_primary_arc(player, npcs, areas=areas)
+    sim_priorities = player.get("sim_priorities") or build_sim_priorities(
+        player, npcs=npcs, areas=areas,
+    )
     player_area = player.get("area")
     player_city = player.get("location")
 
@@ -214,6 +218,7 @@ def npc_simulation_weights(player, npcs, *, areas=None, institutions=None):
         if npc.get("status") != "alive":
             continue
         w = score_npc(npc, player=player, arc=primary, institutions=institutions, npc_id=nid)
+        w *= npc_tick_multiplier(nid, npc, sim_priorities)
         if player_area and npc.get("area") == player_area:
             w *= 1.0
         elif player_city and npc.get("location") == player_city:

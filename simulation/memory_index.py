@@ -9,6 +9,31 @@ from simulation.importance_router import score_memory_record
 from simulation.memory_retrieval import get_relevant_memories
 
 
+def _beat_log_candidates(player, query_words, *, focal_npc_id=None):
+    candidates = []
+    for i, rec in enumerate((player or {}).get("beat_memory_log") or []):
+        text = (rec.get("story_meaning") or rec.get("action") or "").strip()
+        if not text:
+            continue
+        score = score_memory_record(rec, player=player)
+        score += sum(1 for w in query_words if w in text.lower()) * 16
+        if focal_npc_id and focal_npc_id == rec.get("target_id"):
+            score += 24
+        candidates.append({
+            "id": rec.get("id") or f"beat:{i}",
+            "text": text,
+            "score": score,
+            "memory": {
+                "type": "beat_memory",
+                "action": text[:200],
+                "actor": "player",
+                "importance": rec.get("importance") or score,
+                "tick": rec.get("tick"),
+            },
+        })
+    return candidates
+
+
 def _narrative_memory_candidates(player, query_words, *, focal_npc_id=None):
     candidates = []
     for i, mem in enumerate((player or {}).get("narrative_memories") or []):
@@ -75,7 +100,9 @@ def retrieve_memories_for_beat(
         return event_hits[:limit]
 
     narrative = _narrative_memory_candidates(player, query_words, focal_npc_id=focal_npc_id)
+    beat_log = _beat_log_candidates(player, query_words, focal_npc_id=focal_npc_id)
     narrative.sort(key=lambda c: c.get("score", 0), reverse=True)
+    beat_log.sort(key=lambda c: c.get("score", 0), reverse=True)
 
     seen_text = set()
     merged = []
@@ -87,6 +114,14 @@ def retrieve_memories_for_beat(
         merged.append(mem)
 
     for cand in narrative[: max(3, limit // 4)]:
+        mem = cand["memory"]
+        key = (mem.get("action") or "")[:80].lower()
+        if key and key in seen_text:
+            continue
+        seen_text.add(key)
+        merged.append(mem)
+
+    for cand in beat_log[: max(4, limit // 3)]:
         mem = cand["memory"]
         key = (mem.get("action") or "")[:80].lower()
         if key and key in seen_text:

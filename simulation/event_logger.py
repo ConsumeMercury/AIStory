@@ -46,7 +46,7 @@ def flush_events():
         pass
 
 
-def log_event(event_type, actor, action, target=None, location=None, effects=None, tick=None):
+def log_event(event_type, actor, action, target=None, location=None, effects=None, tick=None, player=None):
     event = {
         "id": str(uuid.uuid4()),
         "tick_time": datetime.now(timezone.utc).isoformat(),
@@ -61,6 +61,9 @@ def log_event(event_type, actor, action, target=None, location=None, effects=Non
             event_type, action, effects=effects, target=target,
         ),
     }
+    if player and event_type in ("player_action", "player_interaction", "combat"):
+        from simulation.importance_router import score_event
+        event["importance"] = score_event(event, player=player)
     if not isinstance(event["effects"], list):
         event["effects"] = []
     with _buffer_lock:

@@ -6,6 +6,7 @@ finalize_beat() runs after prose: causal pressure and arc bookkeeping.
 """
 
 from simulation.narrative_promises import list_promises
+from simulation.sim_priorities import build_sim_priorities
 from simulation.story_manager import (
     beat_obligation_directive,
     get_primary_arc,
@@ -124,6 +125,9 @@ def prepare_beat(player, *, kind, action_ctx, npcs=None, areas=None, tick=None):
     if focal and focal not in priority_npc_ids:
         priority_npc_ids = [focal] + priority_npc_ids
 
+    sim_priorities = build_sim_priorities(player, npcs=npcs, areas=areas)
+    player["sim_priorities"] = sim_priorities
+
     beat_plan = {
         "arc_id": arc.get("arc_id") if arc else stakes.get("arc_id"),
         "arc_kind": arc.get("kind") if arc else None,
@@ -134,6 +138,7 @@ def prepare_beat(player, *, kind, action_ctx, npcs=None, areas=None, tick=None):
         "lose": stakes.get("lose"),
         "memory_query": memory_query,
         "priority_npc_ids": priority_npc_ids,
+        "sim_priorities": sim_priorities,
         "open_promises": [p.get("label", "")[:60] for p in list_promises(player)[:3]],
         "scene_plan": scene_plan,
     }

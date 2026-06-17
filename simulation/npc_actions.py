@@ -224,9 +224,15 @@ def simulate_npcs(tick=None):
         save(NPC_FILE, npcs)
         return
 
-    from simulation.story_manager import npc_simulation_weights, weighted_npc_sample
+    from simulation.story_manager import npc_simulation_weights
+    from simulation.sim_tiers import hierarchical_npc_sample, run_abstract_regional_pulse
+
     weights = npc_simulation_weights(player, npcs, areas=areas, institutions=institutions)
-    active = weighted_npc_sample(npc_ids, weights, min(max_npcs, len(npc_ids)))
+    active, pulse_ids = hierarchical_npc_sample(
+        npc_ids, npcs, player, weights, min(max_npcs, len(npc_ids)),
+    )
+    if pulse_ids:
+        run_abstract_regional_pulse(pulse_ids, npcs, tick=tick)
 
     for npc_id in active:
         npc = npcs[npc_id]

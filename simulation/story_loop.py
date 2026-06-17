@@ -37,7 +37,6 @@ from simulation.prose_validator import (
 from simulation.npc_continuity import ensure_npc_continuity_locks
 from simulation.journal_summary import maybe_compact_journal
 from simulation.narrative_continuity import update_npc_narrative_cache
-from simulation.npc_memory_engine import record_player_action
 from simulation.skill_check import run_action_check, apply_check_costs
 from simulation.player_identity import (
     detect_self_introduction, mark_name_revealed_to_present, locals_know_name,
@@ -72,10 +71,9 @@ from simulation.rival_engine import bump_notoriety, maybe_spawn_rival, rival_dir
 from simulation.player_legacy import legacy_from_action, legacy_narrator_block
 from simulation.story_manager import sync_all_pipelines
 from simulation.story_orchestrator import prepare_beat, finalize_beat
-from simulation.narrative_memory import record_beat_narrative_memory
-from simulation.player_reputation import build_reputation_profile
+from simulation.memory_record import record_beat_outcome
 from simulation.memory_embeddings import ingest_event_vector
-from simulation.narrative_causality import record_from_beat
+from simulation.player_reputation import build_reputation_profile
 from simulation.narrative_promises import (
     detect_promises_in_scene,
     try_resolve_from_action,
@@ -83,11 +81,7 @@ from simulation.narrative_promises import (
 from simulation.information_packets import emit_from_player_beat, persist_packets
 from simulation.memory_consolidator import maybe_consolidate_player_memories
 from simulation.story_entropy import nudge_stale_district_tension
-from simulation.belief_model import update_beliefs_from_event
-from simulation.npc_emotions import emotions_from_beat
-from simulation.personality_drift import drift_from_beat
-from simulation.institution_memory import record_from_player_action
-from simulation.claimed_memory import record_beat_memory, interrogation_directive
+from simulation.claimed_memory import interrogation_directive
 from simulation.reputation_layers import build_reputation_layers
 from simulation.economy_pressure import ripple_from_district_shock
 from simulation.investigation_cases import ensure_case, advance_case, case_narrator_block, sanitize_active_case
@@ -606,7 +600,7 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
         areas = load(AREAS_FILE, {})
         sync_all_pipelines(player, areas)
         nudge_stale_district_tension(player, areas)
-        action_evt = log_event("player_action", "player", action, tick=tick)
+        action_evt = log_event("player_action", "player", action, tick=tick, player=player)
         ingest_event_vector(player, action_evt)
         save(PLAYER_FILE, player)
         if areas:
@@ -1229,7 +1223,6 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
     scene_state, present, area_present = _refresh_scene(
         player, npcs, world, action_ctx, tick, persist=True,
     )
-    focus_npcs, crowd_note, focal_id = select_scene_cast(present, player, action_ctx)
     areas_story = load(AREAS_FILE, {})
     with state_lock():
         player = load(PLAYER_FILE, {})
@@ -1239,6 +1232,7 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
         if tick % 5 == 0 or not player.get("reputation_profile"):
             build_reputation_profile(player)
         save(PLAYER_FILE, player)
+    focus_npcs, crowd_note, focal_id = select_scene_cast(present, player, action_ctx)
     combat_snap = action_ctx.get("combat_snapshot")
     if kind == "attack" and combat_snap:
         snap_id = combat_snap.get("id")
@@ -1253,62 +1247,48 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
         focus_ids_set = {n["id"] for n in focus_npcs}
         intro_for_scene = [n for n in to_introduce if not focus_ids_set or n["id"] in focus_ids_set][:1]
 
-    # memory only for focus + witnesses (not entire crowd)
-    focus_ids = [n["id"] for n in focus_npcs]
-    mem_ids = focus_ids if focus_ids else []
-    if not mem_ids and present:
-        mem_ids = [present[0]["id"]]
-    mem_tag = action_ctx.get("memory_tag", "general")
-    mem_target = action_ctx.get("target_id")
-    if kind == "attack" and mem_target:
-        mem_ids = list(set(mem_ids + [mem_target]))
-    if mem_ids:
-        record_player_action(
-            mem_ids, mem_tag, action,
-            player.get("area") or player.get("location"),
-            tick, world.get("day"), target_id=mem_target,
-            intensity=1.2 if kind in ("threaten", "help", "insult") else 1.0,
-        )
-
     interaction_evt = log_event(
         "player_interaction", "player", action_ctx.get("memory_tag", "general"),
         target=action_ctx.get("target_id"), location=player.get("location"),
-        effects=[kind], tick=tick,
+        effects=[kind], tick=tick, player=player,
     )
     with state_lock():
         player = load(PLAYER_FILE, {})
         world = load(WORLD_FILE, {})
-        ingest_event_vector(player, interaction_evt)
-        record_beat_narrative_memory(
-            player, kind=kind, action=action, action_ctx=action_ctx, tick=tick,
+        outcome = record_beat_outcome(
+            player,
+            kind=kind,
+            action=action,
+            action_ctx=action_ctx,
+            world=world,
+            tick=tick,
+            focal_id=focal_id,
+            focus_npcs=focus_npcs,
+            present=present,
+            interaction_event=interaction_evt,
         )
-        record_from_beat(player, kind, action_ctx, world, tick=tick)
         try_resolve_from_action(player, action, kind, tick=tick)
         emit_from_player_beat(world, player, kind, action_ctx, tick=tick)
         persist_packets(world)
-        tid = action_ctx.get("target_id") or focal_id
-        npcs_live = load(NPC_FILE, {})
-        institutions = load("world/institutions.json", {})
-        target_live = npcs_live.get(tid) if tid else None
+        target_live = outcome.get("target_live")
+        institutions = outcome.get("institutions") or load("world/institutions.json", {})
         check = action_ctx.get("skill_check") or {}
         success = check.get("success", True)
-        if tid and target_live:
-            emotions_from_beat(target_live, kind, success=success)
-            drift_from_beat(target_live, kind, success=success)
-            record_beat_memory(target_live, kind, action, tick=tick)
-            update_beliefs_from_event(target_live, interaction_evt, tick=tick)
-            save(NPC_FILE, npcs_live)
-        if target_live:
-            record_from_player_action(
-                institutions, player, kind, action_ctx, target_live, tick=tick,
-            )
-            save("world/institutions.json", institutions)
         build_reputation_layers(
             player, area_id=player.get("area"), target_npc=target_live, institutions=institutions,
         )
         if kind == "attack" and success and player.get("area"):
             areas_live = load(AREAS_FILE, {})
-            ripple_from_district_shock(player.get("area"), areas_live, crime_delta=3, prosperity_delta=-2)
+            if action_ctx.get("combat_fatal") and target_live:
+                from simulation.consequence_cascade import register_combat_consequences
+                register_combat_consequences(
+                    player, target_live, world=world, areas=areas_live,
+                    fatal=True, tick=tick,
+                )
+            else:
+                ripple_from_district_shock(
+                    player.get("area"), areas_live, crime_delta=3, prosperity_delta=-2,
+                )
             save(AREAS_FILE, areas_live)
         save(PLAYER_FILE, player)
 
@@ -1589,7 +1569,8 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
             except Exception:
                 pass
         journal = player.get("journal") or []
-        player["journal"] = journal[-300:]
+        from simulation.journal_retention import trim_journal
+        player["journal"] = trim_journal(journal, player=player)
         save(PLAYER_FILE, player)
 
     if scene:

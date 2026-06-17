@@ -138,6 +138,49 @@ def should_retain_memory(record, *, threshold=35, player=None):
     return score_memory_record(record, player=player) >= threshold
 
 
+_JOURNAL_KIND_BOOST = {
+    "attack": 28,
+    "accuse": 24,
+    "confess": 24,
+    "blackmail": 22,
+    "investigate": 18,
+    "find": 14,
+    "search": 10,
+    "talk": 8,
+    "ask_about": 12,
+    "personal_talk": 10,
+    "travel": 6,
+    "explore": 5,
+}
+
+
+def score_journal_entry(entry, *, player=None):
+    """Rank journal beats for retention when trimming long campaigns."""
+    if not isinstance(entry, dict):
+        return 1
+    base = 28
+    kind = entry.get("kind") or ""
+    base += _JOURNAL_KIND_BOOST.get(kind, 0)
+    if entry.get("combat_fatal"):
+        base += 22
+    if entry.get("target_ambiguous"):
+        base += 6
+    boundary = entry.get("boundary") or {}
+    if boundary.get("regen", {}).get("attempts"):
+        base += 8
+    if boundary.get("auditor", {}).get("confirmed_count"):
+        base += 5
+    text = " ".join(
+        str(entry.get(k, "")) for k in ("action", "excerpt", "scene", "place")
+    ).lower()
+    arc = get_primary_arc(player) if player else None
+    for kw in arc_keywords(arc):
+        if kw in text:
+            base += 10
+            break
+    return max(1, min(100, base))
+
+
 def rank_rumors(rumors, *, player, limit=3, focal_npc_id=None, npcs=None, areas=None):
     """Sorted rumors for narrator injection."""
     if not rumors:
