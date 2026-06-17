@@ -20,7 +20,7 @@ def _sentences(text, max_n=3):
     return [p.strip() for p in parts if p.strip()][:max_n]
 
 
-def build_avoid_repeating(journal, limit=3):
+def build_avoid_repeating(journal, limit=3, *, player=None, focal_npc_id=None):
     """Extract recent scene fingerprints so the model knows what NOT to reuse."""
     entries = (journal or [])[-limit:]
     if not entries:
@@ -28,20 +28,33 @@ def build_avoid_repeating(journal, limit=3):
 
     lines = []
     banned_motifs = set()
+    banned_quotes = []
 
     for entry in entries:
-        excerpt = (entry.get("excerpt") or "").strip()
-        if not excerpt:
+        scene = (entry.get("scene") or entry.get("excerpt") or "").strip()
+        if not scene:
             continue
-        for sent in _sentences(excerpt, 2):
+        for sent in _sentences(scene, 2):
             lines.append(sent[:180])
-        for word in _APPEARANCE_WORDS.findall(excerpt):
+        from simulation.narrative_continuity import extract_dialogue_lines
+        for quote in extract_dialogue_lines(scene, limit=3):
+            q = quote[:120]
+            if q and q not in banned_quotes:
+                banned_quotes.append(q)
+        for word in _APPEARANCE_WORDS.findall(scene):
             banned_motifs.add(word.lower())
-        for word in _PLOT_REPEAT.findall(excerpt):
+        for word in _PLOT_REPEAT.findall(scene):
             banned_motifs.add(word.lower())
         action = entry.get("action", "")
         if action:
             lines.append(f"(player already did: {action[:80]})")
+
+    if player and focal_npc_id:
+        rec = (player.get("known_npcs") or {}).get(focal_npc_id, {})
+        for line in rec.get("prior_lines") or []:
+            clean = line.strip().strip('"').strip()
+            if clean and clean[:120] not in banned_quotes:
+                banned_quotes.append(clean[:120])
 
     motif_line = ""
     if banned_motifs:
@@ -50,10 +63,19 @@ def build_avoid_repeating(journal, limit=3):
             + ", ".join(sorted(banned_motifs)[:20])
         )
 
+    quote_block = ""
+    if banned_quotes:
+        quote_lines = "\n".join(f'- "{q}"' for q in banned_quotes[-6:])
+        quote_block = (
+            "\nFORBIDDEN VERBATIM LINES (already spoken — new wording only):\n"
+            f"{quote_lines}\n"
+        )
+
     body = "\n".join(f"- {s}" for s in lines[-8:])
     return (
         "DO NOT REPEAT from recent scenes — no second opening, no re-explaining the same mystery:\n"
         f"{body}"
+        f"{quote_block}"
         f"{motif_line}\n"
         "Start this beat from the NEXT moment. No weather opener. No re-introducing yourself visually."
     )

@@ -26,6 +26,11 @@ VIOLATION_PRIORITY = {
     "focal role is": 55,
     "prose uses": 55,
     " imagery": 55,
+    "repeated prior": 60,
+    "echoed prior speech": 60,
+    "repeated established": 55,
+    "structured fact tags": 70,
+    "dialogue names place": 45,
     "investigate beat": 40,
     "too short": 10,
 }

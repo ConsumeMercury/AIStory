@@ -101,6 +101,24 @@ def test_ask_about_reconstructs_why_question():
     assert "tomas" not in ctx["player_speech"].lower()
 
 
+def test_ask_the_role_about_topic_is_ask_about_with_speech():
+    action = "ask the merchant about the signature on the parchment"
+    speech = speech_for_ask_about(action)
+    assert speech
+    assert "signature" in speech.lower()
+    assert "merchant" not in speech.lower()
+    ctx = interpret_action(
+        action,
+        {"scene_focus": "m1", "known_npcs": {}},
+        [_npc("m1", role="merchant", name="Sera")],
+        {},
+        npcs={"m1": _npc("m1", role="merchant", name="Sera")},
+    )
+    assert ctx["kind"] == "ask_about"
+    assert ctx.get("player_speech")
+    assert "signature" in ctx["player_speech"].lower()
+
+
 def test_ask_about_reconstructs_what_question():
     action = "Ask the herbalist what she meant about the garden gates"
     speech = speech_for_ask_about(action)

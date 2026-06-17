@@ -289,7 +289,7 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
     scene_facts = "\n\n".join(p for p in facts_parts if p)
     action_block = _novel_action_block(action_context, action_context.get("player_speech") if action_context else None)
     player_block = _novel_player_block(player, locals_know_player_name, kind, has_journal)
-    avoid_block = build_avoid_repeating(journal)
+    avoid_block = build_avoid_repeating(journal, player=player, focal_npc_id=focal_npc_id)
     continuity_block = build_continuity_note(
         journal, kind, player_action, player=player, action_context=action_context,
     )

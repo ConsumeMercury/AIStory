@@ -112,7 +112,13 @@ def summarize_entries_llm(entries, player, npcs):
         "Beats:\n" + "\n".join(beats[:SUMMARIZE_CHUNK])
     )
     try:
-        text = generate_text(prompt, temperature=0.4, top_p=0.9, max_tokens=512)
+        from simulation.gemini_client import generate_text, structured_json_max_tokens
+        text = generate_text(
+            prompt,
+            temperature=0.4,
+            top_p=0.9,
+            max_tokens=structured_json_max_tokens(floor=1024, ceiling=4096),
+        )
         if text and len(text.strip()) > 40:
             return text.strip(), "llm"
     except Exception as e:

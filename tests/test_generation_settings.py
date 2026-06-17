@@ -90,5 +90,5 @@ def test_narrative_block_includes_no_reestablishment():
     assert "NO RE-ESTABLISHMENT" in block
     assert "ESTABLISHED PLACE" in block
     assert "HARD BAN" in block
-    assert "VOICE ANCHOR" in block
+    assert "PRIOR DIALOGUE" in block
     assert "ESTABLISHED PERSON" in block

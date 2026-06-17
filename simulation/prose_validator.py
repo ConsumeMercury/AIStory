@@ -28,8 +28,9 @@ _ROLE_WORDS = {
 }
 
 _FOCAL_DIALOGUE_KINDS = frozenset({
-    "talk", "personal_talk", "attack", "confess", "search", "ask_name",
+    "talk", "personal_talk", "attack", "confess", "search", "ask_name", "ask_about",
     "show_respect", "insult", "threaten", "help", "give", "trade", "guild", "find",
+    "accuse", "blackmail",
 })
 
 _AMBIENT_GUARD = re.compile(
@@ -247,7 +248,7 @@ def analyze_prose(text, ctx, player, npcs):
             text, role, gender,
             allow_roles=ctx.get("allow_roles") or (),
         )
-        if mismatch and kind in ("confess", "talk", "attack", "search", "find", "show_respect", "insult"):
+        if mismatch and kind in _FOCAL_DIALOGUE_KINDS:
             issues.append(mismatch)
 
     fatal = ctx.get("combat_fatal")
@@ -267,6 +268,12 @@ def analyze_prose(text, ctx, player, npcs):
     drift = place_drift(text, scene_place)
     if drift:
         issues.append(drift)
+
+    if focus_id and kind in _FOCAL_DIALOGUE_KINDS:
+        from simulation.narrative_continuity import find_repeated_prior_content
+        repeated = find_repeated_prior_content(text, player, focus_id)
+        if repeated:
+            issues.append(repeated)
 
     speaker = wrong_speaker_dialogue(
         text,
@@ -436,11 +443,8 @@ def queue_prose_correction(player, issues):
 
 
 def prose_retry_limit():
-    raw = os.environ.get("AISTORY_PROSE_RETRIES", "1")
-    try:
-        return max(0, min(2, int(raw)))
-    except ValueError:
-        return 1
+    from simulation.regen_governor import max_regen_attempts
+    return max_regen_attempts()
 
 
 def log_scene_prose_issues(text, *, player, npcs, action_ctx, focal_npc_id,

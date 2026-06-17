@@ -214,6 +214,10 @@ def run_prose_audit(
     if mode == "off" or not should:
         return [], meta
 
+    if (action_ctx or {}).get("prose_retry", 0) > 0:
+        meta["skip_reason"] = "regen_retry"
+        return [], meta
+
     meta["invoked"] = True
     nominations = audit_prose_llm(
         text,

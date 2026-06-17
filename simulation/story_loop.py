@@ -30,7 +30,6 @@ from simulation.generation_guardrails import build_hard_constraints_block, build
 from simulation.prose_validator import (
     log_scene_prose_issues,
     build_prose_correction_block,
-    queue_prose_correction,
 )
 from simulation.npc_continuity import ensure_npc_continuity_locks
 from simulation.journal_summary import maybe_compact_journal
@@ -297,7 +296,15 @@ def _generate_scene_with_validation(
         )
         with state_lock():
             pl = load(PLAYER_FILE, {})
-            queue_prose_correction(pl, issues)
+            combined = build_combined_correction_block(
+                prose_issues, fact_issues, auditor_issues,
+            )
+            if combined:
+                pl.setdefault("delayed_directives", []).append({
+                    "summary": "prose correction",
+                    "directive": combined[:900],
+                })
+                pl["delayed_directives"] = (pl.get("delayed_directives") or [])[-10:]
             from simulation.regen_governor import build_regen_exhausted_directive
             exhausted = build_regen_exhausted_directive(issues)
             if exhausted and regen_meta.get("exhausted"):
@@ -401,12 +408,15 @@ def _do_combat(player, npcs, monsters, present, tick, action, action_ctx):
 
     injuries = ", ".join(result.get("player_injuries") or []) or "none new"
     facts = build_combat_facts(target, result, target_kind, npcs)
+    pstats = player.setdefault("stats", {})
+    pstats.setdefault("max_health", pstats.get("health", 100))
+    tstats = target.setdefault("stats", {})
     directive = (
         f"{facts}\n"
         f"Combat over {result['rounds']} exchanges. "
-        f"Player health {player['stats']['health']}/{player['stats']['max_health']}, "
-        f"stamina {player['stats'].get('stamina', '?')}. "
-        f"Target health {target['stats']['health']}. "
+        f"Player health {pstats.get('health', '?')}/{pstats.get('max_health', '?')}, "
+        f"stamina {pstats.get('stamina', '?')}. "
+        f"Target health {tstats.get('health', '?')}. "
         + ("Fatal." if result["fatal"] else "Fight ended — both may still be standing; do NOT invent a kill.")
         + f" Consequences: {cons}. Player injuries: {injuries}. "
         "Narrate pain, exhaustion, and aftermath — not a blow-by-blow list. "
@@ -1218,9 +1228,9 @@ def process_player_action(action, *, on_prose_chunk=None):
     if action_ctx.get("target_ambiguous"):
         pending = player.get("pending_target_clarification") or {}
         scene = build_clarification_scene(pending)
-        prose_issues = []
+        gate_issues = []
     else:
-        scene, prose_issues, output_boundary = _generate_scene_with_validation(
+        scene, gate_issues, output_boundary = _generate_scene_with_validation(
             action=scene_action,
             world=world,
             player=player,
@@ -1256,8 +1266,8 @@ def process_player_action(action, *, on_prose_chunk=None):
     )
     turn_boundary = build_turn_boundary(action_ctx, output_boundary)
     tagged_issues = tag_turn_issues(
-        output_boundary.get("prose_issues") or prose_issues,
-        output_boundary.get("fact_issues") or [],
+        output_boundary.get("prose_issues", []),
+        output_boundary.get("fact_issues", []),
         action_ctx,
         turn_boundary,
         auditor_issues=output_boundary.get("auditor_issues"),
@@ -1372,7 +1382,7 @@ def process_player_action(action, *, on_prose_chunk=None):
         skill_check=player.get("last_check"),
         scene_preview=(scene or "")[:240],
         area_arrival=area_arrival,
-        prose_issues=prose_issues or None,
+        prose_issues=output_boundary.get("prose_issues") or None,
         boundary=turn_boundary,
         tagged_issues=tagged_issues or None,
         memory_debug=action_ctx.get("memory_debug"),

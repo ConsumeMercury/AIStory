@@ -51,23 +51,7 @@ def mark_scene_relocation(player, action_ctx):
     ).strip()
 
 
-def resolve_travel_destination(action, player, current_area, dests, areas):
-    """
-    Pick a travel destination from the area graph, or a sub-place within the current area.
-    Returns (chosen_area_id|None, subplace_dict|None, message).
-    Never picks a random fallback district.
-    """
-    text = (action or "").lower()
-
-    sub, local_msg = resolve_local_movement(action, player, current_area)
-    if sub:
-        return None, sub, local_msg
-    if local_msg and not sub:
-        return None, None, local_msg
-
-    if not dests:
-        return None, None, "There is nowhere reachable from here on the map."
-
+def _score_travel_destinations(text, dests, areas):
     scored = []
     for aid, hours in dests.items():
         area = areas.get(aid, {})
@@ -85,17 +69,44 @@ def resolve_travel_destination(action, player, current_area, dests, areas):
             score += 25
         if score > 0:
             scored.append((score, hours, aid))
+    return scored
 
+
+def _pick_travel_destination(text, dests, areas):
+    scored = _score_travel_destinations(text, dests, areas)
     if not scored:
-        return None, None, (
-            "That place is not on the travel map from here. "
-            "Name a district you can reach, or explore where you stand."
-        )
-
+        return None
     scored.sort(key=lambda x: (-x[0], x[1]))
-    chosen = scored[0][2]
-    player.pop("scene_subplace", None)
-    return chosen, None, None
+    return scored[0][2]
+
+
+def resolve_travel_destination(action, player, current_area, dests, areas):
+    """
+    Pick a travel destination from the area graph, or a sub-place within the current area.
+    Returns (chosen_area_id|None, subplace_dict|None, message).
+    Never picks a random fallback district.
+    """
+    text = (action or "").lower()
+
+    sub, local_msg = resolve_local_movement(action, player, current_area)
+    if sub:
+        return None, sub, local_msg
+
+    chosen = _pick_travel_destination(text, dests, areas) if dests else None
+    if chosen:
+        player.pop("scene_subplace", None)
+        return chosen, None, None
+
+    if local_msg:
+        return None, None, local_msg
+
+    if not dests:
+        return None, None, "There is nowhere reachable from here on the map."
+
+    return None, None, (
+        "That place is not on the travel map from here. "
+        "Name a district you can reach, or explore where you stand."
+    )
 
 
 def sync_scene_focus(player, present, npcs):
@@ -190,14 +201,22 @@ def build_conversation_ledger(player, journal, npc_id, action_ctx):
 
     last_player = None
     last_scene = None
+    last_quotes = []
     for entry in reversed(journal[-6:]):
         if entry.get("focus_npc") == npc_id or (
             name_known and name.split()[0].lower() in (entry.get("action") or "").lower()
         ):
             if not last_player:
                 last_player = entry.get("action", "")[:120]
-            if not last_scene and entry.get("excerpt"):
-                last_scene = entry.get("excerpt", "")[:200]
+            if not last_scene:
+                scene = entry.get("scene") or entry.get("excerpt") or ""
+                if scene:
+                    from simulation.narrative_continuity import extract_dialogue_lines
+                    last_quotes = extract_dialogue_lines(scene, limit=2)
+                    if last_quotes:
+                        last_scene = " / ".join(last_quotes)[:240]
+                    else:
+                        last_scene = scene[-240:]
             if last_player and last_scene:
                 break
 
@@ -205,6 +224,11 @@ def build_conversation_ledger(player, journal, npc_id, action_ctx):
         lines.append(f"- Last player action: {last_player}")
     if last_scene:
         lines.append(f"- Last beat (do not replay): {last_scene}")
+    if last_quotes:
+        lines.append(
+            "- NPC already said (new answer required — do NOT reuse these exact lines): "
+            + " / ".join(f'"{q}"' for q in last_quotes[:2])
+        )
 
     check = (action_ctx or {}).get("skill_check")
     if check and not check.get("success"):

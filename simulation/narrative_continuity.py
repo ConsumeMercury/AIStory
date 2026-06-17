@@ -177,6 +177,29 @@ def build_stalled_beat_note(player, journal, action_context, focal_npc_id, area_
     return "CONTINUITY — STALL:\n" + "\n".join(f"- {ln}" for ln in lines)
 
 
+def find_repeated_prior_content(text, player, focal_npc_id, *, min_quote_len=28):
+    """Flag when new prose reuses stored NPC dialogue or gesture sentences."""
+    if not text or not focal_npc_id:
+        return None
+    rec = (player.get("known_npcs") or {}).get(focal_npc_id, {})
+    lower = text.lower()
+
+    for line in rec.get("prior_lines") or []:
+        clean = line.strip().strip('"').strip()
+        if len(clean) < min_quote_len:
+            continue
+        if clean.lower() in lower:
+            return f"focal NPC repeated prior line verbatim: {clean[:72]!r}"
+        if len(clean) >= 48 and clean[:36].lower() in lower:
+            return f"focal NPC echoed prior speech: {clean[:72]!r}"
+
+    for detail in rec.get("established_details") or []:
+        d = (detail or "").strip()
+        if len(d) >= 48 and d.lower() in lower:
+            return "prose repeated established gesture/description verbatim"
+    return None
+
+
 def build_narrative_continuity_block(
     player, journal, focal_npc_id, npcs, *, known_ids, area_id, action_kind,
     action_context=None,
@@ -200,14 +223,14 @@ def build_narrative_continuity_block(
         if details:
             body = "\n".join(f"- {d}" for d in details[:6])
             parts.append(
-                "ESTABLISHED DETAILS (already true in prior beats — stay consistent, do not contradict):\n"
+                "ESTABLISHED DETAILS (stay consistent — do NOT repeat these sentences verbatim each beat):\n"
                 f"{body}"
             )
         prior = rec.get("prior_lines") or []
         if prior:
             body = "\n".join(f'- "{ln}"' for ln in prior[-2:])
             parts.append(
-                "VOICE ANCHOR (this person has spoken like this — match rhythm and register):\n"
+                "PRIOR DIALOGUE (register only — do NOT quote these lines again; answer the new question):\n"
                 f"{body}"
             )
 

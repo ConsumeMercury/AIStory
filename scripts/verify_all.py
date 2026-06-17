@@ -274,40 +274,48 @@ def test_smoke_test():
 
 def main():
     missing = _require_world_files()
-    if missing:
-        print("Building test world (AISTORY_AUTO_CHAR=1)...")
-        os.environ["AISTORY_AUTO_CHAR"] = "1"
-        from src.main import bootstrap_world
-        bootstrap_world()
-        missing = _require_world_files()
+    prev_auto = os.environ.pop("AISTORY_AUTO_CHAR", None)
+    try:
         if missing:
-            raise RuntimeError(f"bootstrap failed; still missing: {missing}")
+            print("Building test world (AISTORY_AUTO_CHAR=1)...")
+            os.environ["AISTORY_AUTO_CHAR"] = "1"
+            from src.main import bootstrap_world
+            bootstrap_world()
+            missing = _require_world_files()
+            if missing:
+                raise RuntimeError(f"bootstrap failed; still missing: {missing}")
+        os.environ.pop("AISTORY_AUTO_CHAR", None)
 
-    tests = [
-        ("imports", test_imports),
-        ("bootstrap_import", test_bootstrap_import),
-        ("world_patch", test_world_patch),
-        ("sim_tick", test_sim_tick),
-        ("npc_choose_action", test_npc_choose_action),
-        ("meta_commands", test_meta_commands),
-        ("starting_placement", test_starting_placement),
-        ("storyline_catalog", test_storyline_catalog),
-        ("llm_content_validators", test_llm_content_validators),
-        ("investigation_flow", test_investigation_flow),
-        ("story_loop_offline", test_story_loop_offline),
-        ("generation_report_offline", test_generation_report_offline),
-        ("simulation_audit", test_simulation_audit),
-        ("smoke_test", test_smoke_test),
-    ]
-    failed = []
-    for name, fn in tests:
-        try:
-            fn()
-            print(f"OK    {name}")
-        except Exception:
-            failed.append(name)
-            print(f"FAIL  {name}")
-            traceback.print_exc()
+        tests = [
+            ("imports", test_imports),
+            ("bootstrap_import", test_bootstrap_import),
+            ("world_patch", test_world_patch),
+            ("sim_tick", test_sim_tick),
+            ("npc_choose_action", test_npc_choose_action),
+            ("meta_commands", test_meta_commands),
+            ("starting_placement", test_starting_placement),
+            ("storyline_catalog", test_storyline_catalog),
+            ("llm_content_validators", test_llm_content_validators),
+            ("investigation_flow", test_investigation_flow),
+            ("story_loop_offline", test_story_loop_offline),
+            ("generation_report_offline", test_generation_report_offline),
+            ("simulation_audit", test_simulation_audit),
+            ("smoke_test", test_smoke_test),
+        ]
+        failed = []
+        for name, fn in tests:
+            try:
+                fn()
+                print(f"OK    {name}")
+            except Exception:
+                failed.append(name)
+                print(f"FAIL  {name}")
+                traceback.print_exc()
+    finally:
+        if prev_auto is None:
+            os.environ.pop("AISTORY_AUTO_CHAR", None)
+        else:
+            os.environ["AISTORY_AUTO_CHAR"] = prev_auto
     if failed:
         print(f"\n{len(failed)} check(s) failed: {', '.join(failed)}")
         sys.exit(1)

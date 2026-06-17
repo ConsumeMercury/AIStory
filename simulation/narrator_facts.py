@@ -128,11 +128,11 @@ def validate_narrator_facts(facts, player, npcs, scene_state, action_ctx, focal_
 
     focal = focal_id or ctx.get("target_id")
     if focal and facts.get("speaking"):
+        from simulation.boundary_metrics import _DIALOGUE_KINDS
+
         if len(facts["speaking"]) > 1:
             issues.append("multiple FACT speaking tags — one focal speaker per beat")
-        elif facts["speaking"][0] != focal and ctx.get("kind") in (
-            "talk", "ask_about", "ask_name", "personal_talk", "threaten", "help",
-        ):
+        elif facts["speaking"][0] != focal and ctx.get("kind") in _DIALOGUE_KINDS:
             issues.append(
                 f"FACT speaking tag {facts['speaking'][0]!r} "
                 f"does not match focal npc {focal!r}"

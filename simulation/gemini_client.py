@@ -327,7 +327,7 @@ def generate_text_stream(prompt, *, temperature=0.78, top_p=0.88, max_tokens=Non
         if m not in models_to_try:
             models_to_try.append(m)
 
-    caps = (token_cap, min(token_cap * 2, 8192))
+    caps = (token_cap, min(token_cap + 4096, 12288))
     last_err = None
 
     for model in models_to_try:
@@ -418,7 +418,7 @@ def generate_text(
         if m not in models_to_try:
             models_to_try.append(m)
 
-    caps = (token_cap, min(token_cap * 2, 16384 if json_output else 8192))
+    caps = (token_cap, min(token_cap + 4096, 16384 if json_output else 12288))
     truncated = _looks_truncated_json if json_output else _looks_truncated
     err_hint = (
         "Try raising GEMINI_MAX_OUTPUT_TOKENS (e.g. 8192)."

@@ -86,6 +86,28 @@ def test_persist_boundary_trace_on_player():
     assert summary["turns_in_history"] == 1
 
 
+def test_facts_missing_for_dialogue_requires_speaking_tag():
+    from simulation.boundary_metrics import facts_missing_for_beat
+
+    facts = {"speaking": [], "death": [], "places": ["cellars"], "schedules": []}
+    emission = summarize_fact_emission(facts)
+    assert facts_missing_for_beat("ask_about", {"target_id": "g1"}, facts, emission)
+    facts["speaking"] = ["g1"]
+    emission = summarize_fact_emission(facts)
+    assert not facts_missing_for_beat("ask_about", {"target_id": "g1"}, facts, emission)
+
+
+def test_tag_turn_issues_skips_duplicate_schedule_shape():
+    boundary = {
+        "schedule_untagged": True,
+        "schedule_regex_captures": [{"label": "third toll"}],
+    }
+    fact_issues = ["timed event promised in prose (third toll) but no [SCHEDULE: event_id | label | +Nh] tag emitted"]
+    tagged = tag_turn_issues([], fact_issues, {"kind": "talk"}, boundary)
+    schedule_tags = [t for t in tagged if "schedule" in t["summary"].lower()]
+    assert len(schedule_tags) == 1
+
+
 def test_turn_trace_records_boundary():
     record_turn(tick=1, action="test", kind="talk", boundary={"classifier_mode": "off"})
     last = get_last_turn()

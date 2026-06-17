@@ -20,6 +20,19 @@ _DIALOGUE_KINDS = frozenset({
 
 _WHEN_PATTERN = re.compile(r"\b(when|wait for|until)\b", re.I)
 
+MISSING_FACTS_ISSUE = "structured fact tags expected for this beat but none emitted"
+
+
+def facts_missing_for_beat(kind, action_ctx, facts, emission):
+    """True when expected structured tags are absent for this beat kind."""
+    expected = facts_expected_for_beat(kind, action_ctx)
+    if not expected:
+        return False
+    kind = kind or (action_ctx or {}).get("kind") or "general"
+    if kind in _DIALOGUE_KINDS:
+        return not (facts or {}).get("speaking")
+    return not (emission or {}).get("has_facts")
+
 
 def facts_expected_for_beat(kind, action_ctx=None):
     """True when structured fact tags should appear in narrator output."""
@@ -137,7 +150,7 @@ def build_output_boundary(
     facts = parse_narrator_facts(raw_scene or "")
     emission = summarize_fact_emission(facts)
     expected = facts_expected_for_beat(kind, action_ctx)
-    missing = expected and not emission["has_facts"]
+    missing = facts_missing_for_beat(kind, action_ctx, facts, emission)
     am = auditor_meta or {}
     rg = regen_meta or {}
     auditor_count = len(auditor_issues or [])
@@ -161,7 +174,9 @@ def build_output_boundary(
         "prose_retry": prose_retry or 0,
         "regenerated": bool(prose_retry),
         "regen_exhausted": bool(rg.get("exhausted")),
-        "gate_active": bool(prose_issues or fact_issues or auditor_count),
+        "gate_active": bool(
+            prose_issues or fact_issues or auditor_count or missing or schedule.get("schedule_untagged")
+        ),
         "focal_id": focal_id,
     }
 
@@ -218,15 +233,20 @@ def tag_turn_issues(prose_issues, fact_issues, action_ctx, boundary, auditor_iss
     if boundary.get("facts_missing"):
         tagged.append(tag_bug(
             BugShape.DIRECTIVE_HOPE,
-            "structured fact tags expected for this beat but none emitted",
+            MISSING_FACTS_ISSUE,
         ))
     if boundary.get("schedule_untagged"):
-        caps = boundary.get("schedule_regex_captures") or []
-        label = caps[0].get("label") if caps else "timed event"
-        tagged.append(tag_bug(
-            BugShape.DIRECTIVE_HOPE,
-            f"schedule promise in prose ({label}) without [SCHEDULE] tag",
-        ))
+        schedule_in_facts = any(
+            "schedule" in (issue or "").lower() or "timed event" in (issue or "").lower()
+            for issue in (fact_issues or [])
+        )
+        if not schedule_in_facts:
+            caps = boundary.get("schedule_regex_captures") or []
+            label = caps[0].get("label") if caps else "timed event"
+            tagged.append(tag_bug(
+                BugShape.DIRECTIVE_HOPE,
+                f"schedule promise in prose ({label}) without [SCHEDULE] tag",
+            ))
     return tagged
 
 

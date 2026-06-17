@@ -13,6 +13,11 @@ from simulation.prose_validator import (
 )
 from simulation.prose_auditor import run_prose_audit
 from simulation.regen_governor import dedupe_issues
+from simulation.boundary_metrics import (
+    MISSING_FACTS_ISSUE,
+    facts_missing_for_beat,
+    summarize_fact_emission,
+)
 from simulation.scheduled_events import extract_event_promises, parse_schedule_tags
 
 
@@ -58,9 +63,12 @@ def validate_turn_output(
         known_ids=known_ids,
     )
     facts = parse_narrator_facts(text)
+    emission = summarize_fact_emission(facts)
     fact_issues = validate_narrator_facts(
         facts, player, npcs, scene_state, action_ctx, focal_npc_id,
     )
+    if facts_missing_for_beat((action_ctx or {}).get("kind"), action_ctx, facts, emission):
+        fact_issues = list(fact_issues) + [MISSING_FACTS_ISSUE]
     schedule_issue = validate_schedule_emission(text)
     if schedule_issue:
         fact_issues = list(fact_issues) + [schedule_issue]

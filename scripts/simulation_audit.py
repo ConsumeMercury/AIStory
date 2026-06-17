@@ -54,6 +54,27 @@ def _restore_npc_home_areas(npcs):
         npc.pop("travel_state", None)
 
 
+def _restore_player_area(player):
+    """Recover area id when playtest saves lost it."""
+    if player.get("area"):
+        return player["area"]
+    loc = player.get("location")
+    dist = player.get("district")
+    if loc and dist:
+        player["area"] = f"{loc}:{dist}"
+        return player["area"]
+    from storage import load
+    areas = load("world/areas.json", {})
+    if areas:
+        aid = next(iter(areas))
+        player["area"] = aid
+        parts = aid.split(":", 1)
+        player.setdefault("location", parts[0])
+        player.setdefault("district", parts[1] if len(parts) > 1 else parts[0])
+        return aid
+    return None
+
+
 def _reset_player_baseline():
     from storage import load, save
     player = load("player/player.json", {})
@@ -68,12 +89,19 @@ def _reset_player_baseline():
     player.pop("last_acquired_item", None)
     player.pop("pending_target_clarification", None)
     player["delayed_directives"] = []
+    player["scheduled_events"] = {}
+    player.pop("boundary_stats", None)
+    player.pop("boundary_history", None)
+    player.pop("last_boundary_trace", None)
     stats = player.setdefault("stats", {})
+    stats.setdefault("max_health", stats.get("health", 100))
+    stats.setdefault("max_stamina", stats.get("stamina", 30))
     stats["health"] = stats.get("max_health", 100)
     stats["stamina"] = stats.get("max_stamina", 30)
     stats["stress"] = max(0, stats.get("stress", 0) - 20)
     player["inventory"] = []
     player["equipment"] = {"weapon": None, "armor": None, "trinket": None}
+    _restore_player_area(player)
     area = player.get("area")
     npcs = load("characters/npcs.json", {})
     _restore_npc_home_areas(npcs)
@@ -492,6 +520,8 @@ def audit_scheduled_event_fires_on_wait():
 
 
 def main():
+    from simulation import simulation_runner
+    simulation_runner.stop()
     tests = [
         ("explore_anchor", audit_explore_anchor),
         ("attack_her", audit_attack_her),
@@ -508,13 +538,16 @@ def main():
         ("scheduled_event_fires_on_wait", audit_scheduled_event_fires_on_wait),
     ]
     failed = []
-    for name, fn in tests:
-        try:
-            fn()
-            print(f"OK    {name}")
-        except Exception as e:
-            failed.append(name)
-            print(f"FAIL  {name}: {e}")
+    try:
+        for name, fn in tests:
+            try:
+                fn()
+                print(f"OK    {name}")
+            except Exception as e:
+                failed.append(name)
+                print(f"FAIL  {name}: {e}")
+    finally:
+        simulation_runner.start()
     if failed:
         print(f"\n{len(failed)} audit(s) failed: {', '.join(failed)}")
         sys.exit(1)

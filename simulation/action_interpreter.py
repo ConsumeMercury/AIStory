@@ -17,7 +17,10 @@ _PATTERNS = [
     (re.compile(r"\b(blackmail|leverage against| expose them)\b", re.I), "blackmail"),
     (re.compile(r"\b(accuse|call out|denounce|you did it)\b", re.I), "accuse"),
     (re.compile(r"\b(ask about|ask around about|what do you know about|who killed|who stole|about the murder|about the theft)\b", re.I), "ask_about"),
-    (re.compile(r"^\s*ask\s+[A-Za-z][A-Za-z'-]{1,28}\s+about\s+", re.I), "ask_about"),
+    (re.compile(
+        r"^\s*ask\s+(?:(?:the|a|an)\s+)?[A-Za-z][A-Za-z'-]{1,28}\s+about\s+",
+        re.I,
+    ), "ask_about"),
     (re.compile(r"^\s*ask\s+.+\b(why|what|how|where|when|who|whether|if)\b", re.I), "ask_about"),
     (re.compile(
         r"^\s*(?:the|a|an)\s+(?:[\w'-]+\s+){0,5}?"
@@ -70,7 +73,8 @@ _PATTERNS = [
 
 _QUOTED = re.compile(r'"([^"]+)"|\'([^\']+)\'')
 _ASK_NAMED = re.compile(
-    r"^\s*ask\s+([A-Za-z][A-Za-z'-]{1,28})\s+about\s+(.+)$", re.I,
+    r"^\s*ask\s+(?:(?:the|a|an)\s+)?([A-Za-z][A-Za-z'-]{1,28})\s+about\s+(.+)$",
+    re.I,
 )
 
 _INTENT_WORDS = {

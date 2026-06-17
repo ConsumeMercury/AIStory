@@ -68,6 +68,21 @@ def test_approach_kind_for_door():
     assert ctx["kind"] == "approach"
 
 
+def test_travel_prefers_area_graph_over_orphan_local_fail():
+    player = {"area": "redmoor:docks", "story_flags": {}, "scene_focus": None}
+    areas = {
+        "redmoor:docks": {"name": "The Docks"},
+        "redmoor:high_quarter": {"name": "High Quarter"},
+    }
+    dests = {"redmoor:high_quarter": 2}
+    chosen, sub, msg = resolve_travel_destination(
+        "go to high quarter", player, "redmoor:docks", dests, areas,
+    )
+    assert chosen == "redmoor:high_quarter"
+    assert sub is None
+    assert msg is None
+
+
 def test_travel_fail_no_district_match():
     player = {"area": "city:temple_row", "story_flags": {}}
     chosen, sub, msg = resolve_travel_destination(
