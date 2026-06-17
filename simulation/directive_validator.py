@@ -40,6 +40,20 @@ def find_directive_conflicts(prompt_text):
     return issues
 
 
+def arbitrate_prompt(prompt_text, conflicts):
+    """Prepend priority order when contradictory directives were detected."""
+    if not conflicts or not prompt_text:
+        return prompt_text
+    header = (
+        "ARBITRATION — conflicting instructions detected; obey in this order:\n"
+        "1. HARD CONSTRAINTS and SCENE FACTS\n"
+        "2. PLACE LOCK and THIS BEAT\n"
+        "3. CONVERSATION LEDGER / continuity / DO NOT REPEAT\n"
+        "4. Atmosphere, craft, and story tier hints\n\n"
+    )
+    return header + prompt_text
+
+
 def validate_directives(prompt_text):
     """Log conflicts at warning level; return issues for telemetry."""
     issues = find_directive_conflicts(prompt_text)

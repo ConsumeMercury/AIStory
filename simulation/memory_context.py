@@ -30,7 +30,7 @@ def _focal_npc_memory_block(focal_npc_id, npcs):
     )
 
 
-def build_memory_context(player, npcs, memories, *, focal_npc_id=None, present_ids=None):
+def build_memory_context(player, npcs, memories, *, focal_npc_id=None, present_ids=None, kind=None):
     """
     Build journal history and retrieved events under token budget.
     Plot summary lives in NARRATIVE THREAD (beat_structure) — not duplicated here.
@@ -43,7 +43,8 @@ def build_memory_context(player, npcs, memories, *, focal_npc_id=None, present_i
         "distant_history": distant_context_block(player),
         "retrieved_events": format_world_echoes(memories[:8], limit=6) if memories else "",
     }
-    trimmed, evictions = apply_memory_budget(sections)
+    pin = ("focal_npc_memory",) if focal_npc_id else ()
+    trimmed, evictions = apply_memory_budget(sections, pin_slots=pin)
     debug = format_memory_debug(trimmed, evictions)
 
     parts = [trimmed[k] for k in (

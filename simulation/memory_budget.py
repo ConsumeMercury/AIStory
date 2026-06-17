@@ -31,16 +31,18 @@ def memory_budget_enabled():
     return os.environ.get("AISTORY_SKIP_MEMORY_BUDGET", "").lower() not in ("1", "true", "yes")
 
 
-def apply_memory_budget(sections, *, total_cap=None):
+def apply_memory_budget(sections, *, total_cap=None, pin_slots=None):
     """
     Trim memory sections to per-slot and optional total caps.
 
     sections: dict slot_name -> str (may be empty)
+    pin_slots: slot names that must not be dropped entirely (may still truncate last)
     Returns (trimmed_sections, evictions) where evictions is a list of human-readable notes.
     """
     if not memory_budget_enabled():
         return dict(sections), []
 
+    pin_slots = frozenset(pin_slots or ())
     caps = {name: cap for name, cap, _ in MEMORY_SLOTS}
     total_cap = total_cap or TOTAL_MEMORY_BUDGET
     trimmed = {k: (v or "") for k, v in sections.items()}
@@ -66,6 +68,8 @@ def apply_memory_budget(sections, *, total_cap=None):
     for name, cap, _prio in sorted(MEMORY_SLOTS, key=lambda x: x[2]):
         if total_used() <= total_cap:
             break
+        if name in pin_slots:
+            continue
         if trimmed.get(name):
             evictions.append(f"{name}: dropped for total memory budget")
             trimmed[name] = ""
@@ -73,6 +77,8 @@ def apply_memory_budget(sections, *, total_cap=None):
     for name, cap, _prio in sorted(MEMORY_SLOTS, key=lambda x: x[2], reverse=True):
         if total_used() <= total_cap:
             break
+        if name in pin_slots and trimmed.get(name):
+            continue
         text = trimmed.get(name, "")
         if not text:
             continue

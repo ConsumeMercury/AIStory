@@ -1,14 +1,15 @@
-import json
-import os
+import threading
 import uuid
 from datetime import datetime, timezone
 
+from game.state_context import state_lock
 from storage import load, save
 from simulation.event_importance import score_event_importance
 
 EVENT_FILE = "events/event_log.json"
 
 _event_buffer = []
+_buffer_lock = threading.Lock()
 
 
 def load_events():
@@ -18,17 +19,23 @@ def load_events():
 
 def all_events():
     """On-disk events plus buffered entries not yet flushed to disk."""
-    return load_events() + list(_event_buffer)
+    with _buffer_lock:
+        buffered = list(_event_buffer)
+    with state_lock():
+        return load_events() + buffered
 
 
 def flush_events():
     global _event_buffer
-    if not _event_buffer:
-        return
-    events = load_events()
-    events.extend(_event_buffer)
-    save(EVENT_FILE, events)
-    _event_buffer = []
+    with _buffer_lock:
+        if not _event_buffer:
+            return
+        pending = _event_buffer
+        _event_buffer = []
+    with state_lock():
+        events = load_events()
+        events.extend(pending)
+        save(EVENT_FILE, events)
 
 
 def log_event(event_type, actor, action, target=None, location=None, effects=None, tick=None):
@@ -48,5 +55,6 @@ def log_event(event_type, actor, action, target=None, location=None, effects=Non
     }
     if not isinstance(event["effects"], list):
         event["effects"] = []
-    _event_buffer.append(event)
+    with _buffer_lock:
+        _event_buffer.append(event)
     return event

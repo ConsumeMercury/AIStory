@@ -40,6 +40,35 @@ def run_world_health_report(*, strict=False):
     focus = player.get("scene_focus")
     if focus and focus not in npcs:
         issues.append(f"scene_focus {focus!r} not in npcs.json")
+    elif focus and npcs.get(focus, {}).get("status") != "alive":
+        issues.append(f"scene_focus {focus!r} points to non-alive NPC")
+    elif focus:
+        focus_npc = npcs.get(focus, {})
+        player_area = player.get("area")
+        if player_area and focus_npc.get("area") and focus_npc.get("area") != player_area:
+            warnings.append(
+                f"scene_focus {focus!r} is in {focus_npc.get('area')!r}, player in {player_area!r}"
+            )
+
+    pending = player.get("pending_target_clarification")
+    if pending:
+        opts = pending.get("options") or []
+        stale = [o.get("id") for o in opts if o.get("id") and o.get("id") not in npcs]
+        if stale:
+            issues.append(f"pending_target_clarification references missing NPCs: {stale[:3]}")
+
+    cast = player.get("scene_cast") or {}
+    cast_ids = cast.get("ids") or []
+    dead_cast = [
+        cid for cid in cast_ids
+        if cid not in npcs or npcs[cid].get("status") != "alive"
+    ]
+    if dead_cast:
+        warnings.append(f"scene_cast lists {len(dead_cast)} absent/dead NPC id(s)")
+
+    stats = player.get("stats") or {}
+    if player and not stats.get("max_health"):
+        warnings.append("player stats missing max_health")
 
     pipe = player.get("starting_pipeline") or {}
     pipe_area = pipe.get("area_id")

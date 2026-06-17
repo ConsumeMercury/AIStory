@@ -25,11 +25,11 @@ def test_narrator_generate_scene_passes_max_tokens():
 
 
 def test_story_modules_do_not_write_scene_focus():
-    for rel in ("simulation/story_manager.py", "simulation/story_graph.py"):
+    import re
+    write_pat = re.compile(r"""player\s*\[\s*['"]scene_focus['"]\s*\]\s=""")
+    for rel in ("simulation/story_manager.py", "simulation/story_graph.py", "simulation/scene_cast.py"):
         text = (ROOT / rel).read_text(encoding="utf-8")
-        assert 'player["scene_focus"]' not in text, rel
-        assert "player['scene_focus']" not in text, rel
-        assert 'player["scene_focus"] =' not in text, rel
+        assert not write_pat.search(text), rel
 
 
 def test_tier_modules_wired_in_narrator_or_turn_loop():

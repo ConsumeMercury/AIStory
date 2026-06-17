@@ -173,11 +173,12 @@ def resolve_target_and_absence(action, player, present, npcs, action_ctx, world,
             elif has_role:
                 action_ctx["target_id"] = None
             elif not action_ctx.get("target_id"):
-                focus = player.get("scene_focus")
-                if focus and focus in present_ids:
-                    action_ctx["target_id"] = focus
-                elif len(present) == 1:
-                    action_ctx["target_id"] = present[0]["id"]
+                if len(present) == 1:
+                    focus = player.get("scene_focus")
+                    if focus and focus in present_ids:
+                        action_ctx["target_id"] = focus
+                    else:
+                        action_ctx["target_id"] = present[0]["id"]
 
 
 def build_conversation_ledger(player, journal, npc_id, action_ctx):

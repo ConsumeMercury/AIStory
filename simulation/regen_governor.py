@@ -44,12 +44,17 @@ def max_regen_attempts():
         return 1
 
 
-def min_priority_for_regen():
+def min_priority_for_regen(kind=None):
     raw = os.environ.get("AISTORY_REGEN_MIN_PRIORITY", "40")
     try:
-        return max(0, min(100, int(raw)))
+        base = max(0, min(100, int(raw)))
     except ValueError:
-        return 40
+        base = 40
+    if kind in {"observe", "rest", "withdraw", "ask_name", "wait", "explore"}:
+        return max(base, 55)
+    if kind in {"attack", "confess", "accuse", "blackmail"}:
+        return min(base, 35)
+    return base
 
 
 def _issue_priority(issue_text):
@@ -86,7 +91,7 @@ def prioritize_issues(issues):
     )
 
 
-def issues_warrant_regen(issues, attempt):
+def issues_warrant_regen(issues, attempt, kind=None):
     """
     True if remaining issues are severe enough to spend another regen attempt.
     attempt is 0-based count of regens already performed.
@@ -97,10 +102,10 @@ def issues_warrant_regen(issues, attempt):
         return False
     ranked = prioritize_issues(issues)
     top = _issue_priority(ranked[0])
-    return top >= min_priority_for_regen()
+    return top >= min_priority_for_regen(kind)
 
 
-def apply_regen_governor(issues, attempt):
+def apply_regen_governor(issues, attempt, kind=None):
     """
     Returns (issues_for_display, should_retry, governor_meta).
     """
@@ -112,7 +117,7 @@ def apply_regen_governor(issues, attempt):
         "issue_count": len(ranked),
         "exhausted": False,
     }
-    should_retry = issues_warrant_regen(ranked, attempt)
+    should_retry = issues_warrant_regen(ranked, attempt, kind)
     if ranked and not should_retry and attempt < max_regen_attempts():
         meta["exhausted"] = True
         meta["skip_reason"] = "below_min_priority"

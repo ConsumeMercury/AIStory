@@ -352,12 +352,15 @@ def schedule_deferred_shadow_audit(
             )
             from game.state_context import state_lock
             from simulation.boundary_metrics import patch_boundary_trace_auditor
+            from simulation.locks import get_action_turn_lock
             from storage import load, save
 
-            with state_lock():
-                pl = load(PLAYER_FILE, {})
-                patch_boundary_trace_auditor(pl, tick=tick, auditor_meta=meta)
-                save(PLAYER_FILE, pl)
+            with get_action_turn_lock():
+                with state_lock():
+                    pl = load(PLAYER_FILE, {})
+                    if not patch_boundary_trace_auditor(pl, tick=tick, auditor_meta=meta):
+                        return
+                    save(PLAYER_FILE, pl)
         except Exception as exc:
             log.warning("Deferred shadow audit failed (tick=%s): %s", tick, exc)
 

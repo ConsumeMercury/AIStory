@@ -149,8 +149,6 @@ def select_scene_cast(present, player, action_ctx, max_focus=1):
         )
         if not keep_dead_combat:
             action_ctx["target_id"] = None
-            if player.get("scene_focus") == tid:
-                player["scene_focus"] = None
 
     known = player.get("known_npcs", {})
     institutions = load(INST_FILE, {})
@@ -316,4 +314,4 @@ def pick_name_target(player, present, action):
             return n
     if len(candidates) == 1:
         return candidates[0]
-    return candidates[0]
+    return None

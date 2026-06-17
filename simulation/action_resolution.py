@@ -566,7 +566,7 @@ def build_combat_facts(target, result, target_kind, npcs):
         lines.append("- No other NPC may pretend to be this person. No priest/scholar swap.")
     else:
         lines.append(
-            f"- Outcome: NOT FATAL — {name} is alive (health {target['stats'].get('health', '?')}). "
+            f"- Outcome: NOT FATAL — {name} is alive (health {target.get('stats', {}).get('health', '?')}). "
             "They may speak briefly if focal — same person, same voice."
         )
     lines.append("- ONLY this opponent was in the fight. Do not invent a different combatant.")

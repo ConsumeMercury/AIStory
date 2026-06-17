@@ -819,7 +819,6 @@ def get_full_state():
     from game.undo import can_undo
     from simulation.gemini_client import api_key
     from simulation.investigation_cases import sanitize_active_case
-    from simulation.story_loop import _present_npcs
 
     with state_lock():
         player = load(PLAYER_FILE, {})
@@ -828,13 +827,6 @@ def get_full_state():
         world = load(WORLD_FILE, {})
         npcs = load(NPC_FILE, {})
         areas = load(AREAS_FILE, {})
-        present = _present_npcs(npcs, player)
-        _, case_changed = sanitize_active_case(
-            player, npcs, areas, present_ids=[n["id"] for n in present],
-        )
-        if case_changed:
-            save(PLAYER_FILE, player)
-            save(NPC_FILE, npcs)
         return {
         "header": get_header_bar(player, world),
         "player": get_player_panel(player),

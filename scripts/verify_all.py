@@ -291,8 +291,13 @@ def test_simulation_audit():
 
 
 def test_smoke_test():
-    import scripts.smoke_test as smoke
-    smoke.main()
+    from simulation import simulation_runner
+    simulation_runner.stop()
+    try:
+        import scripts.smoke_test as smoke
+        smoke.main()
+    finally:
+        simulation_runner.start()
 
 
 def main():
@@ -322,8 +327,8 @@ def main():
             ("investigation_flow", test_investigation_flow),
             ("story_loop_offline", test_story_loop_offline),
             ("generation_report_offline", test_generation_report_offline),
-            ("world_health_report", test_world_health_report),
             ("simulation_audit", test_simulation_audit),
+            ("world_health_report", test_world_health_report),
             ("smoke_test", test_smoke_test),
         ]
         failed = []

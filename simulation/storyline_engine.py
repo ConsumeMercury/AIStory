@@ -25,16 +25,19 @@ def advance_storylines(tick=None):
     changed = False
     for inst in institutions.values():
         arc = inst.get("arc")
-        if not arc:
+        if not arc or not isinstance(arc, dict):
             continue
 
-        arc["tension"] = max(0, min(100, arc["tension"] + random.randint(-1, 4)))
+        tension = arc.get("tension", 0)
+        arc["tension"] = max(0, min(100, tension + random.randint(-1, 4)))
 
-        if arc["tension"] >= 60 and random.random() < 0.35:
-            arc["stage"] += 1
+        stages = arc.get("stages") or []
+        if arc["tension"] >= 60 and random.random() < 0.35 and stages:
+            arc["stage"] = arc.get("stage", 0) + 1
             arc["tension"] = random.randint(15, 35)
-            if arc["stage"] < len(arc["stages"]):
-                arc["current"] = arc["stages"][arc["stage"]]
+            stage_idx = arc.get("stage", 0)
+            if stage_idx < len(stages):
+                arc["current"] = stages[stage_idx]
                 actor = inst.get("leader") or next(iter(inst.get("members", {})), None)
                 if actor:
                     log_event("institution_event", actor, "storyline_beat",
@@ -94,6 +97,8 @@ def advance_storylines(tick=None):
                         _save("player/player.json", player)
                 except Exception:
                     log.exception("starting pipeline sync failed for area %s", aid)
+
+    if changed:
         save("rumors/rumors.json", rumors[-200:])
     save(INST_FILE, institutions)
     save(AREAS_FILE, areas)

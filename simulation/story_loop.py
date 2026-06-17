@@ -4,6 +4,7 @@ Turns a typed player action into a narrated scene with mechanical and memory eff
 
 import random
 import re
+from contextlib import contextmanager
 
 from generation.descriptor_generator import short_descriptor
 from storage import load, save
@@ -87,6 +88,7 @@ from simulation.economy_pressure import ripple_from_district_shock
 from simulation.investigation_cases import ensure_case, advance_case, case_narrator_block, sanitize_active_case
 from simulation.storyline_behavior import narrator_storyline_block
 from game.starting_placement import starting_pipeline_narrator_block
+from simulation.locks import get_action_turn_lock
 from game.state_context import state_lock
 from game.undo import push_undo_snapshot
 from simulation.district_state import district_narrator_block
@@ -134,6 +136,23 @@ PLAYER_FILE = "player/player.json"
 RUMOR_FILE = "rumors/rumors.json"
 LOC_FILE = "world/locations.json"
 AREAS_FILE = "world/areas.json"
+
+
+@contextmanager
+def _exclusive_player_turn():
+    """Block background sim ticks and concurrent player turns for one action."""
+    from simulation import simulation_runner
+
+    with get_action_turn_lock():
+        worker = getattr(simulation_runner, "_worker", None)
+        sim_was_alive = worker is not None and worker.is_alive()
+        if sim_was_alive:
+            simulation_runner.stop()
+        try:
+            yield
+        finally:
+            if sim_was_alive:
+                simulation_runner.start()
 
 
 def _present_npcs(npcs, player):
@@ -237,6 +256,8 @@ def _generate_scene_with_validation(
             events, action, limit=15,
             player=player, area=player.get("area"),
             focal_npc_id=focal_id,
+            npcs=npcs,
+            kind=action_ctx.get("kind"),
         ),
         rumors=rumors[-5:] if rumors else [],
         new_npcs=intro_for_scene,
@@ -276,7 +297,9 @@ def _generate_scene_with_validation(
     attempt = 0
     regen_meta = {}
     while issues:
-        ranked, should_retry, regen_meta = apply_regen_governor(issues, attempt)
+        ranked, should_retry, regen_meta = apply_regen_governor(
+            issues, attempt, action_ctx.get("kind"),
+        )
         issues = ranked
         action_ctx["regen_governor"] = regen_meta
         if not should_retry:
@@ -504,6 +527,11 @@ def _immersion_block(kind, player, world, action_ctx, rumors, events, action, *,
 
 
 def process_player_action(action, *, on_prose_chunk=None):
+    with _exclusive_player_turn():
+        return _process_player_action_core(action, on_prose_chunk=on_prose_chunk)
+
+
+def _process_player_action_core(action, *, on_prose_chunk=None):
     from simulation.turn_trace import record_turn
 
     meta = try_meta_command(action)
@@ -935,10 +963,11 @@ def process_player_action(action, *, on_prose_chunk=None):
                 "success": check.get("success"),
                 "consequence": check.get("consequence"),
             }
-            if not check["success"] and kind == "steal" and present:
-                tid = action_ctx.get("target_id") or present[0]["id"]
-                from simulation.relationship_engine import apply_npc_toward_player
-                apply_npc_toward_player(tid, "betrayal", 1.0)
+            if not check["success"] and kind == "steal":
+                tid = action_ctx.get("target_id")
+                if tid:
+                    from simulation.relationship_engine import apply_npc_toward_player
+                    apply_npc_toward_player(tid, "betrayal", 1.0)
             with state_lock():
                 save(PLAYER_FILE, player)
 

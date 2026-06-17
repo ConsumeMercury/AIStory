@@ -12,11 +12,14 @@ simulation/, ...). It is on sys.path because src/main.py inserts it.
 """
 
 import json
+import logging
 import os
 import sys
 import tempfile
 import threading
 import time
+
+log = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -71,6 +74,17 @@ def rollback_transaction():
     _tx.state = None
 
 
+def reload_transaction_from_disk():
+    """Refresh active transaction from disk (after external file copy)."""
+    state = get_active_state()
+    if state is None:
+        return
+    from game.game_state import GameState
+    fresh = GameState.load_all()
+    state._data.clear()
+    state._data.update(fresh._data)
+
+
 def get_active_state():
     return getattr(_tx, "state", None)
 
@@ -87,7 +101,11 @@ def _disk_load(relpath, default=None):
         if not content:
             return default
         return json.loads(content)
-    except (json.JSONDecodeError, OSError):
+    except json.JSONDecodeError as exc:
+        log.error("Corrupt JSON in %s: %s", relpath, exc)
+        return default
+    except OSError as exc:
+        log.error("Failed to read %s: %s", relpath, exc)
         return default
 
 

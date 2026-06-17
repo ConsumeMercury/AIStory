@@ -1,8 +1,6 @@
-import json
 import random
-import os
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from storage import load, save
 
 MAX_RUMORS = 200
 
@@ -37,47 +35,24 @@ RUMOR_TEMPLATES = {
 }
 
 
-# -------------------------
-# SAFE LOAD / SAVE
-# -------------------------
-def load(filename):
-    path = os.path.join(BASE_DIR, filename)
-    try:
-        if not os.path.exists(path):
-            return []
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read().strip()
-            if not content:
-                return []
-            return json.loads(content)
-    except (json.JSONDecodeError, OSError):
-        return []
-
-
-def save(filename, data):
-    path = os.path.join(BASE_DIR, filename)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-
-
-# -------------------------
-# MAIN SYSTEM
-# -------------------------
 def spread_rumors():
+    config = load("system/config.json", {})
+    if isinstance(config, dict) and not config.get("enable_rumors", True):
+        return
 
-    # 🔥 CONFIG FLAG CHECK (FIX-1)
-    config = load("system/config.json")
-    if isinstance(config, dict):
-        if not config.get("enable_rumors", True):
-            return
+    events = load("events/event_log.json", [])
+    rumors = load("rumors/rumors.json", [])
+    npcs = load("characters/npcs.json", {})
 
-    events = load("events/event_log.json")
-    rumors = load("rumors/rumors.json")
-    npcs   = load("characters/npcs.json")
+    if not isinstance(events, list):
+        events = []
+    if not isinstance(rumors, list):
+        rumors = []
+    if not isinstance(npcs, dict):
+        npcs = {}
 
     recent = events[-10:] if len(events) > 10 else events
 
-    # Track already processed event IDs
     existing_event_ids = set()
     for r in rumors:
         if isinstance(r, dict) and r.get("source_event_id"):

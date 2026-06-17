@@ -469,17 +469,40 @@ def _inject_audit_scholars(player, npcs):
     save("player/player.json", player)
 
 
-def _cleanup_audit_scholars(npcs):
-    """Remove injected audit NPCs so later checks are not polluted."""
-    from storage import save
+_AUDIT_SCHOLAR_IDS = ("audit_scholar_a", "audit_scholar_b")
 
-    changed = False
-    for key in ("audit_scholar_a", "audit_scholar_b"):
+
+def _cleanup_audit_scholars(npcs, player=None):
+    """Remove injected audit NPCs and any player references to them."""
+    from storage import load, save
+
+    if player is None:
+        player = load("player/player.json", {})
+
+    changed_npcs = False
+    for key in _AUDIT_SCHOLAR_IDS:
         if key in npcs:
             del npcs[key]
-            changed = True
-    if changed:
+            changed_npcs = True
+
+    changed_player = False
+    if player.get("scene_focus") in _AUDIT_SCHOLAR_IDS:
+        player["scene_focus"] = None
+        changed_player = True
+
+    journal = player.get("journal") or []
+    filtered = [
+        entry for entry in journal
+        if (entry.get("focus_npc") or "") not in _AUDIT_SCHOLAR_IDS
+    ]
+    if len(filtered) != len(journal):
+        player["journal"] = filtered
+        changed_player = True
+
+    if changed_npcs:
         save("characters/npcs.json", npcs)
+    if changed_player:
+        save("player/player.json", player)
 
 
 def audit_same_role_scholar_focus():
@@ -579,6 +602,8 @@ def main():
                 failed.append(name)
                 print(f"FAIL  {name}: {e}")
     finally:
+        from storage import load
+        _cleanup_audit_scholars(load("characters/npcs.json", {}))
         simulation_runner.start()
     if failed:
         print(f"\n{len(failed)} audit(s) failed: {', '.join(failed)}")

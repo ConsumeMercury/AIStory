@@ -1,49 +1,33 @@
-import json
 import logging
 import random
-import os
+
+from storage import load, save
 
 log = logging.getLogger(__name__)
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
 
 def run_faction_tick(tick=None):
-    config_path = os.path.join(BASE_DIR, "system", "config.json")
-
-    # load config safely
-    try:
-        with open(config_path, "r") as f:
-            config = json.load(f)
-    except Exception:
-        log.warning("faction config load failed; using defaults", exc_info=True)
+    config = load("system/config.json", {})
+    if not isinstance(config, dict):
         config = {}
 
     if not config.get("enable_faction_wars", True):
         return
 
-    factions_path = os.path.join(BASE_DIR, "world", "factions.json")
-
-    try:
-        with open(factions_path, "r") as f:
-            factions = json.load(f)
-    except Exception:
-        log.warning("factions.json load failed; skipping faction tick", exc_info=True)
-        return
-    if not isinstance(factions, dict):
+    factions = load("world/factions.json", {})
+    if not isinstance(factions, dict) or not factions:
         return
 
     faction_list = list(factions.values())
 
     for i, fa in enumerate(faction_list):
         for fb in faction_list[i + 1:]:
+            fa_power = fa.get("power", 0)
+            fb_power = fb.get("power", 0)
+            power_diff = abs(fa_power - fb_power)
 
-            power_diff = abs(fa.get("power", 0) - fb.get("power", 0))
-
-            # war trigger condition
             if power_diff > 30 and random.random() < 0.1:
-
-                if fa["power"] > fb["power"]:
+                if fa_power > fb_power:
                     winner, loser = fa, fb
                 else:
                     winner, loser = fb, fa
@@ -51,7 +35,6 @@ def run_faction_tick(tick=None):
                 loser["power"] = max(0, loser.get("power", 0) - random.randint(3, 8))
                 winner["power"] = min(100, winner.get("power", 0) + random.randint(1, 4))
 
-                # optional logging (safe import)
                 try:
                     from simulation.event_logger import log_event
 
@@ -66,9 +49,4 @@ def run_faction_tick(tick=None):
                 except Exception:
                     log.exception("faction conflict event log failed")
 
-    # save back
-    try:
-        with open(factions_path, "w") as f:
-            json.dump(factions, f, indent=2)
-    except Exception:
-        log.exception("factions.json save failed")
+    save("world/factions.json", factions)

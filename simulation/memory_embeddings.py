@@ -44,11 +44,19 @@ def cosine_similarity(a, b):
     return dot / (na * nb)
 
 
-def embed_text(text):
+_query_embed_cache = {}
+_QUERY_CACHE_MAX = 32
+
+
+def embed_text(text, *, cache_key=None):
     """Return embedding vector or None if unavailable."""
     global _embed_disabled_reason
     if not text or not semantic_memory_enabled():
         return None
+    if cache_key:
+        cached = _query_embed_cache.get(cache_key)
+        if cached is not None:
+            return cached
     try:
         from google import genai
         from google.genai import types
@@ -67,10 +75,20 @@ def embed_text(text):
         if emb:
             values = getattr(emb[0], "values", None) or emb[0].get("values")
             if values:
-                return list(values)
+                vec = list(values)
+                if cache_key:
+                    if len(_query_embed_cache) >= _QUERY_CACHE_MAX:
+                        _query_embed_cache.pop(next(iter(_query_embed_cache)))
+                    _query_embed_cache[cache_key] = vec
+                return vec
         # alternate response shape
         if hasattr(result, "embedding") and result.embedding:
-            return list(result.embedding.values)
+            vec = list(result.embedding.values)
+            if cache_key:
+                if len(_query_embed_cache) >= _QUERY_CACHE_MAX:
+                    _query_embed_cache.pop(next(iter(_query_embed_cache)))
+                _query_embed_cache[cache_key] = vec
+            return vec
     except Exception as e:
         msg = str(e)
         if "404" in msg or "NOT_FOUND" in msg:
@@ -144,7 +162,7 @@ def rank_by_embedding(query, candidates, player, *, limit=5):
     if not semantic_memory_enabled() or not candidates:
         return sorted(candidates, key=lambda c: c.get("score", 0), reverse=True)[:limit]
 
-    qvec = embed_text(query)
+    qvec = embed_text(query, cache_key=f"q:{hash(query[:500])}")
     if not qvec:
         return sorted(candidates, key=lambda c: c.get("score", 0), reverse=True)[:limit]
 

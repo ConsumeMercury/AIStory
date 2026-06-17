@@ -8,17 +8,22 @@ import re
 import shutil
 from datetime import datetime, timezone
 
-from storage import BASE_DIR, MANAGED_PATHS, load, save, full_path
+from storage import MANAGED_PATHS, load, save, full_path, reload_transaction_from_disk
 
 SAVES_DIR = "saves"
 SLOT_INDEX = "saves/index.json"
 _SLOT_RE = re.compile(r"^[a-zA-Z0-9_-]{1,32}$")
 
+_DEFAULTS = {
+    "events/event_log.json": [],
+    "rumors/rumors.json": [],
+}
+
 
 def _slot_dir(slot_id):
     if not _SLOT_RE.match(slot_id or ""):
         raise ValueError("Slot id must be 1-32 chars: letters, numbers, _ or -")
-    return os.path.join(BASE_DIR, SAVES_DIR, slot_id)
+    return full_path(os.path.join(SAVES_DIR, slot_id))
 
 
 def list_slots():
@@ -45,15 +50,16 @@ def save_slot(slot_id, label=None):
     os.makedirs(dest, exist_ok=True)
     character = None
     for rel in MANAGED_PATHS:
-        src = full_path(rel)
-        if not os.path.exists(src):
+        default = _DEFAULTS.get(rel, {})
+        data = load(rel, default)
+        if rel == "player/player.json" and not data:
             continue
         sub = os.path.join(dest, rel.replace("/", os.sep))
         os.makedirs(os.path.dirname(sub), exist_ok=True)
-        shutil.copy2(src, sub)
+        with open(sub, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
         if rel == "player/player.json" and character is None:
-            player = load(rel, {})
-            character = player.get("name")
+            character = data.get("name")
 
     index = load(SLOT_INDEX, {})
     index[slot_id] = {
@@ -77,6 +83,7 @@ def load_slot(slot_id):
             dest = full_path(rel)
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             shutil.copy2(src, dest)
+    reload_transaction_from_disk()
     return load(SLOT_INDEX, {}).get(slot_id, {"id": slot_id})
 
 

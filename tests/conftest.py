@@ -13,3 +13,8 @@ if ROOT not in sys.path:
 def _reset_storage_transaction():
     yield
     storage.rollback_transaction()
+    try:
+        import simulation.event_logger as event_logger
+        event_logger._event_buffer.clear()
+    except Exception:
+        pass

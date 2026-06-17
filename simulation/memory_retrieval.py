@@ -5,6 +5,8 @@ Keyword scoring is always available. When Gemini is configured, hybrid
 semantic+keyword retrieval improves paraphrase recall.
 """
 
+import os
+
 from simulation.memory_embeddings import rank_by_embedding, semantic_memory_enabled
 
 _PLAYER_EVENT_TYPES = frozenset({
@@ -13,6 +15,18 @@ _PLAYER_EVENT_TYPES = frozenset({
 })
 
 _PLAYER_ACTORS = frozenset({"player"})
+
+_LOW_STAKES_SEMANTIC_KINDS = frozenset({
+    "observe", "rest", "withdraw", "ask_name", "wait", "meta_skip",
+})
+
+
+def semantic_retrieval_enabled_for_kind(kind=None):
+    if os.environ.get("AISTORY_SKIP_SEMANTIC_MEMORY", "").lower() in ("1", "true", "yes"):
+        return False
+    if kind in _LOW_STAKES_SEMANTIC_KINDS:
+        return False
+    return semantic_memory_enabled()
 
 
 def _event_text(memory):
@@ -44,7 +58,38 @@ def _keyword_score(memory, query_words):
     return score
 
 
-def _journal_candidates(player, query_words):
+def _focal_boost(memory, focal_npc_id):
+    if not focal_npc_id or not isinstance(memory, dict):
+        return 0
+    target = memory.get("target")
+    actor = memory.get("actor")
+    if target == focal_npc_id or actor == focal_npc_id:
+        return 55
+    if memory.get("type") == "journal_beat" and memory.get("focus_npc") == focal_npc_id:
+        return 45
+    return 0
+
+
+def _build_retrieval_query(query, *, player=None, area=None, focal_npc_id=None, npcs=None, kind=None):
+    parts = [query or "", kind or ""]
+    if area:
+        parts.append(str(area).lower().replace("_", " "))
+    if focal_npc_id and npcs:
+        npc = npcs.get(focal_npc_id) or {}
+        parts.extend([
+            npc.get("name") or "",
+            npc.get("role") or "",
+            focal_npc_id,
+        ])
+    if player and focal_npc_id:
+        for entry in (player.get("journal") or [])[-4:]:
+            if entry.get("focus_npc") == focal_npc_id:
+                parts.append(entry.get("action") or "")
+                break
+    return " ".join(p for p in parts if p).strip()
+
+
+def _journal_candidates(player, query_words, *, focal_npc_id=None):
     """Journal summaries and recent excerpts as retrieval candidates."""
     candidates = []
     from simulation.journal_summary import normalize_summaries, _summary_text
@@ -70,28 +115,51 @@ def _journal_candidates(player, query_words):
             continue
         tick = entry.get("tick", "?")
         score = sum(1 for w in query_words if w in text.lower()) * 12
+        focus_npc = entry.get("focus_npc")
+        mem = {
+            "type": "journal_beat",
+            "action": action,
+            "actor": "player",
+            "location": entry.get("place") or entry.get("location"),
+            "focus_npc": focus_npc,
+        }
+        if focus_npc == focal_npc_id:
+            score += 40
         candidates.append({
             "id": f"journal_beat:{tick}",
             "text": text,
             "score": score,
             "kind": "journal_beat",
-            "memory": {
-                "type": "journal_beat",
-                "action": action,
-                "actor": "player",
-                "location": entry.get("place") or entry.get("location"),
-            },
+            "memory": mem,
         })
     return candidates
 
 
-def get_relevant_memories(memories, query, limit=20, *, player=None, area=None, focal_npc_id=None):
+def get_relevant_memories(
+    memories,
+    query,
+    limit=20,
+    *,
+    player=None,
+    area=None,
+    focal_npc_id=None,
+    npcs=None,
+    kind=None,
+):
     """
     Rank logged events and journal memories by relevance to query text.
 
     Scoped to player-relevant events plus journal summaries/beats — not raw tick stream.
     """
-    query_words = set((query or "").lower().split())
+    retrieval_query = _build_retrieval_query(
+        query,
+        player=player,
+        area=area,
+        focal_npc_id=focal_npc_id,
+        npcs=npcs,
+        kind=kind,
+    )
+    query_words = set((retrieval_query or query or "").lower().split())
     if area:
         area_l = area.lower().replace("_", " ")
         query_words.update(w for w in area_l.split() if len(w) > 3)
@@ -99,7 +167,7 @@ def get_relevant_memories(memories, query, limit=20, *, player=None, area=None, 
     candidates = []
 
     for memory in player_relevant_events(memories):
-        score = _keyword_score(memory, query_words)
+        score = _keyword_score(memory, query_words) + _focal_boost(memory, focal_npc_id)
         if score <= 0 and not query_words:
             score = 1
         mid = memory.get("id") or f"event:{memory.get('tick')}:{memory.get('action', '')[:20]}"
@@ -112,13 +180,13 @@ def get_relevant_memories(memories, query, limit=20, *, player=None, area=None, 
         })
 
     if player:
-        candidates.extend(_journal_candidates(player, query_words))
+        candidates.extend(_journal_candidates(player, query_words, focal_npc_id=focal_npc_id))
 
     if not candidates:
         return []
 
-    if player and semantic_memory_enabled():
-        ranked = rank_by_embedding(query, candidates, player, limit=limit)
+    if player and semantic_retrieval_enabled_for_kind(kind):
+        ranked = rank_by_embedding(retrieval_query or query, candidates, player, limit=limit)
     else:
         ranked = sorted(candidates, key=lambda c: c.get("score", 0), reverse=True)[:limit]
 

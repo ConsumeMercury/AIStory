@@ -36,7 +36,13 @@ from simulation.memory_context import build_memory_context
 from simulation.story_manager import build_story_manager_block
 from simulation.player_reputation import reputation_narrator_block
 from simulation.prompt_profiler import profile_prompt_sections
-from simulation.directive_validator import validate_directives
+from simulation.directive_validator import validate_directives, arbitrate_prompt
+from simulation.narrator_blocks import (
+    craft_core_for_beat,
+    join_sections,
+    narrator_block_profile,
+    rumor_whisper_limit,
+)
 from simulation.story_graph import story_graph_narrator_block
 from simulation.scene_objectives import build_scene_objectives_block
 from simulation.narrative_causality import causality_narrator_block
@@ -291,6 +297,7 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
         memories,
         focal_npc_id=focal_npc_id,
         present_ids=present_ids,
+        kind=kind,
     )
     inv_facts = build_inventory_facts(player, action_context or {})
     facts_parts = [p for p in (inv_facts,) if p]
@@ -394,8 +401,9 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
         extras = []
         if rumors:
             from simulation.immersion_context import format_rumor_whispers
+            limit = rumor_whisper_limit(kind)
             whisper = format_rumor_whispers(
-                rumors[-3:],
+                rumors[-limit:],
                 city=player.get("location"),
                 area_name=area.get("name"),
             )
@@ -406,6 +414,9 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
 
     craft_kind = craft_for_kind(kind)
     token_budget = token_budget_for_kind(kind)
+    has_focal = bool(focal_npc_id)
+    profile = narrator_block_profile()
+    craft_core = craft_core_for_beat(has_journal=has_journal, kind=kind)
 
     hard_block = hard_constraints or build_hard_constraints_block(
         focal_npc_id, focal_npc, place, action_context,
@@ -413,29 +424,28 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
     known_places_block = build_known_places_block(player, aid)
     place_lock_block = build_place_lock(player, area, action_context)
 
-    section_map = {
-        "craft_core": CRAFT_CORE,
+    closing = (
+        "Write the scene now. Literary novel prose only — obey HARD CONSTRAINTS, "
+        "NARRATIVE THREAD, PROSE STRUCTURE, SCENE MODE, and DO NOT REPEAT."
+    )
+
+    sections = {
+        "craft_core": craft_core,
         "narrative_thread": thread_block,
         "story_manager": story_manager_block,
         "scene_objectives": objectives_block,
         "story_graph": graph_block,
-        "causality": causality_block,
-        "promises": promises_block,
-        "entropy": entropy_block,
-        "focal_beliefs": belief_block,
-        "focal_emotion": emotion_block,
-        "social_circle": circle_block,
-        "institution_memory": inst_mem_block,
-        "secret_pressure": secret_block,
-        "culture": culture_block,
-        "economy": economy_block,
-        "world_pressure": pressure_block,
         "prose_structure": structure_block,
         "craft_kind": craft_kind,
         "length": length_block,
         "scene_mode": mode_block,
         "continuity": continuity_block,
         "narrative_continuity": narrative_block,
+        "causality": causality_block,
+        "promises": promises_block,
+        "culture": culture_block,
+        "economy": economy_block,
+        "world_pressure": pressure_block,
         "memory": memory_block,
         "conversation_ledger": ledger_block,
         "known_places": known_places_block,
@@ -449,61 +459,33 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
         "this_beat": f"THIS BEAT: {action_block}",
         "extra_directive": f"Note: {extra_directive}" if extra_directive else "",
         "npc_context": npc_block,
+        "focal_beliefs": belief_block,
+        "focal_emotion": emotion_block,
+        "social_circle": circle_block,
+        "institution_memory": inst_mem_block,
+        "secret_pressure": secret_block,
         "avoid_repeat": avoid_block,
         "reputation": reputation_block,
+        "entropy": entropy_block,
         "guardrails": guardrails_prompt_block(),
         "immersion": immersion,
         "hard_constraints": hard_block,
+        "closing": closing,
     }
-    prompt = _join_prompt_sections(
-        CRAFT_CORE,
-        thread_block,
-        story_manager_block,
-        objectives_block,
-        graph_block,
-        structure_block,
-        craft_kind,
-        length_block,
-        mode_block,
-        continuity_block,
-        narrative_block,
-        causality_block,
-        promises_block,
-        culture_block,
-        economy_block,
-        pressure_block,
-        memory_block,
-        ledger_block,
-        known_places_block,
-        place_lock_block,
-        scene_facts,
-        f"SCENE:\nSetting: {setting}. Place: {place}.",
-        arc,
-        event_block,
-        name_rule,
-        f"PROTAGONIST: {player_block}",
-        f"THIS BEAT: {action_block}",
-        f"Note: {extra_directive}" if extra_directive else "",
-        npc_block,
-        belief_block,
-        emotion_block,
-        circle_block,
-        inst_mem_block,
-        secret_block,
-        avoid_block,
-        reputation_block,
-        entropy_block,
-        guardrails_prompt_block(),
-        immersion,
-        hard_block,
-        "Write the scene now. Literary novel prose only — obey HARD CONSTRAINTS, "
-        "NARRATIVE THREAD, PROSE STRUCTURE, SCENE MODE, and DO NOT REPEAT.",
+
+    prompt = join_sections(
+        sections,
+        kind=kind,
+        has_focal=has_focal,
+        has_journal=has_journal,
+        profile=profile,
     )
     if DEBUG_TOKENS:
-        profile_prompt_sections(section_map, label="assemble_scene_prompt")
+        profile_prompt_sections(sections, label="assemble_scene_prompt")
     conflicts = validate_directives(prompt)
     if action_context is not None and conflicts:
         action_context["directive_conflicts"] = conflicts[:4]
+        prompt = arbitrate_prompt(prompt, conflicts)
     return prompt, token_budget, focal_npc_id, memory_debug
 
 
@@ -526,6 +508,9 @@ def generate_scene(player_action, world, player, present_npcs,
         immersion_block=immersion_block,
         focal_npc_id=focal_npc_id, scene_place=scene_place, hard_constraints=hard_constraints,
     )
+    retry = (action_context or {}).get("prose_retry", 0)
+    if retry:
+        token_budget = max(400, int(token_budget * 0.85))
 
     if DEBUG_TOKENS:
         print("\n===== TOKEN DEBUG =====")

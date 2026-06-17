@@ -187,8 +187,9 @@ def reset_baseline(*, area_only_npcs=True):
     try:
         from scripts.simulation_audit import _restore_npc_home_areas
         _restore_npc_home_areas(npcs)
-    except Exception:
-        pass
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).debug("restore_npc_home_areas failed: %s", exc)
     for npc in npcs.values():
         in_scope = npc.get("area") == area if area_only_npcs else True
         if not in_scope and loc and npc.get("location") != loc:

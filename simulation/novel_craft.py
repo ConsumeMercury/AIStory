@@ -50,6 +50,14 @@ FORM:
 - End on a complete sentence. Land the beat — a line spoken, a door closed, a decision made.
 """
 
+CRAFT_CORE_COMPACT = """
+VOICE: Literary second-person present — not a game log. Vary rhythm; show don't label emotions.
+FORBIDDEN: game language, meta commands as prose, weather openers on return visits,
+invented dialogue for the protagonist, gender/role drift from FOCAL PERSON block,
+teleporting past LOCATION LOCK, crowd dialogue when NO FOCAL CHARACTER.
+FORM: Continuous paragraphs; end on the other person's line or a held silence.
+"""
+
 CRAFT_BY_KIND = {
     "explore": (
         "BEAT TYPE — ARRIVAL / MOVEMENT:\n"
