@@ -259,19 +259,47 @@ def weighted_npc_sample(npc_ids, weights, k):
     return chosen
 
 
-def record_turn_story_progress(player, *, kind, action_ctx, areas=None):
+def record_turn_story_progress(player, *, kind, action_ctx, areas=None, npcs=None):
     """Update scene stakes and nudge district tension on meaningful beats."""
+    from simulation.belief_model import top_beliefs
+    from simulation.narrative_promises import list_promises
+
     areas = areas if areas is not None else load(AREAS_FILE, {})
+    if npcs is None:
+        npcs = load("characters/npcs.json", {})
     sync_all_pipelines(player, areas)
 
     ctx = action_ctx or {}
-    arc = get_primary_arc(player, areas=areas)
+    arc = get_primary_arc(player, npcs, areas=areas)
+    case = player.get("active_case")
+    if case and case.get("solved"):
+        case = None
+    open_promises = list_promises(player)[:2]
+    target_id = ctx.get("target_id") or ctx.get("focal_npc_id")
+    target = npcs.get(target_id) if target_id else None
+
     question = None
     gain = None
     lose = None
+    title = (arc or {}).get("title") or (case or {}).get("title") or "the district trouble"
 
-    if arc:
-        title = arc.get("title", "the plot")
+    if case and arc and arc.get("kind") == "investigation":
+        stage_label = arc.get("stage_label") or "the investigation"
+        suspects = arc.get("suspects") or []
+        sus_names = [(npcs.get(s) or {}).get("name") or s for s in suspects[:2]]
+        sus_bit = f" ({', '.join(sus_names)})" if sus_names else ""
+        if kind in ("ask_about", "investigate", "find", "search"):
+            question = f"Does {stage_label}{sus_bit} reveal who is responsible?"
+            gain = "evidence or a reliable witness"
+            lose = "the trail going cold"
+        elif kind in ("talk", "personal_talk", "accuse", "blackmail"):
+            question = f"Will anyone break silence about {case.get('title', title)}?"
+            gain = "information or alliance"
+            lose = "goodwill or safety"
+        elif kind == "attack":
+            question = "Who pays for violence tied to this case?"
+            lose = "life or standing"
+    elif arc:
         if kind in ("ask_about", "investigate", "find", "search"):
             question = f"What will {title} reveal next?"
             gain = "a clue or lead"
@@ -285,6 +313,29 @@ def record_turn_story_progress(player, *, kind, action_ctx, areas=None):
             lose = "life or standing"
         elif kind == "explore":
             gain = "orientation in the district"
+            question = f"What thread of {title} surfaces in this place?"
+
+    if open_promises and question and open_promises[0].get("label"):
+        plabel = open_promises[0]["label"][:50]
+        question = f"{question} (unsettled: {plabel})"
+    elif open_promises and not question:
+        plabel = open_promises[0].get("label", "")[:50]
+        question = f"What does '{plabel}' mean for what happens next?"
+
+    if target and kind in ("talk", "ask_about", "personal_talk") and not question:
+        beliefs = top_beliefs(target, limit=1)
+        if beliefs:
+            prop = (beliefs[0].get("proposition") or "")[:60]
+            nm = target.get("name") or "they"
+            question = f"Will {nm} act on the belief: {prop}?"
+
+    secrets = (target or {}).get("secrets") or []
+    if secrets and kind in ("accuse", "blackmail", "ask_about"):
+        secret_bit = secrets[0][:50] if isinstance(secrets[0], str) else str(secrets[0])[:50]
+        if not question:
+            question = f"Does this beat force a reckoning over {secret_bit}?"
+        lose = lose or "exposure or retaliation"
+
     check = ctx.get("skill_check") or {}
     if check and not check.get("success"):
         lose = lose or "the other's patience"

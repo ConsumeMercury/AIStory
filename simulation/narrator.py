@@ -40,9 +40,11 @@ from simulation.directive_validator import validate_directives, arbitrate_prompt
 from simulation.narrator_blocks import (
     craft_core_for_beat,
     join_sections,
+    list_included_blocks,
     narrator_block_profile,
     rumor_whisper_limit,
 )
+from simulation.context_curation import rank_rumors_for_narrator
 from simulation.story_graph import story_graph_narrator_block
 from simulation.scene_objectives import build_scene_objectives_block
 from simulation.narrative_causality import causality_narrator_block
@@ -402,10 +404,19 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
         if rumors:
             from simulation.immersion_context import format_rumor_whispers
             limit = rumor_whisper_limit(kind)
+            curated = rank_rumors_for_narrator(
+                rumors,
+                player=player,
+                kind=kind,
+                limit=limit,
+                focal_npc_id=focal_npc_id,
+                npcs=npcs_all,
+            )
             whisper = format_rumor_whispers(
-                rumors[-limit:],
+                curated,
                 city=player.get("location"),
                 area_name=area.get("name"),
+                limit=limit,
             )
             if whisper:
                 extras.append(whisper)
@@ -417,6 +428,11 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
     has_focal = bool(focal_npc_id)
     profile = narrator_block_profile()
     craft_core = craft_core_for_beat(has_journal=has_journal, kind=kind)
+    if action_context is not None:
+        action_context["structure_mode"] = structure_mode
+        action_context["narrator_blocks_included"] = list_included_blocks(
+            kind, has_focal=has_focal, has_journal=has_journal, profile=profile,
+        )
 
     hard_block = hard_constraints or build_hard_constraints_block(
         focal_npc_id, focal_npc, place, action_context,

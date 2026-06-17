@@ -76,14 +76,28 @@ def test_persist_boundary_trace_on_player():
         action="go to the cellar",
         kind="approach",
         turn_boundary=tb,
-        action_ctx={"relocated": True, "left_behind_cast": ["bessa"]},
+        action_ctx={
+            "relocated": True,
+            "left_behind_cast": ["bessa"],
+            "narrative_trace": {"dramatic_question": "Who waits below?", "structure_mode": "action"},
+            "narrative_issues": ["social beat lacks dramatic_question in scene_stakes"],
+        },
         scene_cast_ids=["scraper"],
     )
     assert player["last_boundary_trace"]["tick"] == 3
     assert player["last_boundary_trace"]["reloc"]["left_behind_cast"] == ["bessa"]
+    assert player["last_boundary_trace"]["narrative"]["dramatic_question"] == "Who waits below?"
+    assert player["last_boundary_trace"]["narrative_issues"]
     assert player["boundary_history"]
     summary = summarize_player_boundary_history(player["boundary_history"])
     assert summary["turns_in_history"] == 1
+
+
+def test_session_stats_track_narrative_issues():
+    player = {}
+    tb = {"narrative_issue_count": 2}
+    update_session_boundary_stats(player, tb)
+    assert player["boundary_stats"]["narrative_issues"] == 2
 
 
 def test_facts_missing_for_dialogue_requires_speaking_tag():

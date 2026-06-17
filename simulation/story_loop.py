@@ -52,6 +52,8 @@ from simulation.scene_events import maybe_scene_event
 from simulation.immersion_context import (
     format_rumor_whispers, build_player_inner_voice,
 )
+from simulation.context_curation import rank_rumors_for_narrator
+from simulation.narrator_blocks import rumor_whisper_limit
 from simulation.economy_engine import resolve_trade, resolve_give, validate_trade, validate_give
 from simulation.travel_digest import snapshot_before_travel, build_arrival_digest
 from simulation.area_discovery import record_area_arrival, area_intro_directive
@@ -514,7 +516,17 @@ def _immersion_block(kind, player, world, action_ctx, rumors, events, action, *,
         hunt_narrator_block(player, monsters, areas) if kind in ("explore", "hunt", "observe") else "",
         institution_narrator_block(player, player.get("area"), load("world/institutions.json", {})),
         guild_contract_block(player) if kind in ("guild", "trade", "talk") else "",
-        format_rumor_whispers(rumors, city=player.get("location"), area_name=area.get("name")),
+        format_rumor_whispers(
+            rank_rumors_for_narrator(
+                rumors,
+                player=player,
+                kind=kind,
+                limit=rumor_whisper_limit(kind),
+                npcs=load(NPC_FILE, {}),
+            ),
+            city=player.get("location"),
+            area_name=area.get("name"),
+        ),
         build_player_inner_voice(player, world, action_ctx, journal),
         format_drama_block(player.get("area"), load(NPC_FILE, {})),
         history_block(world),
@@ -1181,7 +1193,9 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
     areas_story = load(AREAS_FILE, {})
     with state_lock():
         player = load(PLAYER_FILE, {})
-        record_turn_story_progress(player, kind=kind, action_ctx=action_ctx, areas=areas_story)
+        record_turn_story_progress(
+            player, kind=kind, action_ctx=action_ctx, areas=areas_story, npcs=npcs,
+        )
         if tick % 5 == 0 or not player.get("reputation_profile"):
             build_reputation_profile(player)
         save(PLAYER_FILE, player)
@@ -1481,6 +1495,28 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
                 "tagged_shapes": [t.get("shape") for t in tagged_issues],
             },
         })
+        from simulation.narrative_trace import build_narrative_trace, validate_narrative_function
+        narrative_trace = build_narrative_trace(
+            player,
+            kind=kind,
+            action_ctx=action_ctx,
+            npcs=npcs,
+            areas=areas_story,
+            focal_npc_id=focal_id,
+            narrator_blocks=action_ctx.get("narrator_blocks_included"),
+            structure_mode=action_ctx.get("structure_mode"),
+        )
+        narrative_issues = validate_narrative_function(
+            player,
+            kind=kind,
+            action_ctx=action_ctx,
+            raw_scene=scene,
+            structure_mode=action_ctx.get("structure_mode"),
+            focal_npc_id=focal_id,
+        )
+        action_ctx["narrative_trace"] = narrative_trace
+        action_ctx["narrative_issues"] = narrative_issues
+        turn_boundary["narrative_issue_count"] = len(narrative_issues)
         update_session_boundary_stats(player, turn_boundary, tagged_issues)
         persist_boundary_trace(
             player,

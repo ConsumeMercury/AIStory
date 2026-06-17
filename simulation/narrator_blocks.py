@@ -227,6 +227,22 @@ def should_include_block(name, kind, *, has_focal, has_journal, profile=None):
     return True
 
 
+def list_included_blocks(kind, *, has_focal, has_journal, profile=None):
+    """Block keys that would ship for this beat (for boundary trace)."""
+    profile = profile or narrator_block_profile()
+    included = []
+    for key in SECTION_ORDER:
+        if key == "arbitration":
+            if profile != "minimal":
+                included.append(key)
+            continue
+        if should_include_block(
+            key, kind, has_focal=has_focal, has_journal=has_journal, profile=profile,
+        ):
+            included.append(key)
+    return included
+
+
 def join_sections(sections, *, kind, has_focal, has_journal, profile=None):
     """Filter and join prompt sections in canonical order."""
     profile = profile or narrator_block_profile()

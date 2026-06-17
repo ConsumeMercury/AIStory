@@ -86,6 +86,15 @@ def cmd_boundary():
         "history_summary": summary,
         "recent_history": history[-10:],
     }
+    narrative = (last_trace or {}).get("narrative") or {}
+    if narrative:
+        payload["narrative_summary"] = {
+            "dramatic_question": narrative.get("dramatic_question"),
+            "structure_mode": narrative.get("structure_mode"),
+            "promises_open": narrative.get("promises_open"),
+            "narrator_block_count": narrative.get("narrator_block_count"),
+            "last_issues": (last_trace or {}).get("narrative_issues") or [],
+        }
     _print_json(payload)
 
 

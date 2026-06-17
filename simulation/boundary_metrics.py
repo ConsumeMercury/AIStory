@@ -304,6 +304,9 @@ def update_session_boundary_stats(player, turn_boundary, tagged_issues=None):
         stats["auditor_mode"] = turn_boundary["auditor_mode"]
     if turn_boundary.get("schedule_untagged"):
         stats["schedule_untagged"] = stats.get("schedule_untagged", 0) + 1
+    n_issues = turn_boundary.get("narrative_issue_count") or 0
+    if n_issues:
+        stats["narrative_issues"] = stats.get("narrative_issues", 0) + n_issues
     if tagged_issues:
         shapes = stats.setdefault("issue_shapes", {})
         for t in tagged_issues:
@@ -451,6 +454,8 @@ def persist_boundary_trace(
             "left_behind_cast": list(ctx.get("left_behind_cast") or []),
         },
         "scheduled_events_pending": len(list_pending_events(player, player.get("area"))),
+        "narrative": ctx.get("narrative_trace") or {},
+        "narrative_issues": list(ctx.get("narrative_issues") or [])[:8],
     }
     player["last_boundary_trace"] = detail
     hist = player.setdefault("boundary_history", [])
