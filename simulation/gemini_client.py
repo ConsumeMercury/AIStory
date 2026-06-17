@@ -18,7 +18,7 @@ from google.genai import types
 
 DEFAULT_MODEL = "gemini-3.5-flash"
 FALLBACK_MODELS = ("gemini-2.5-flash", "gemini-3-flash-preview")
-DEFAULT_MAX_OUTPUT_TOKENS = 4096
+DEFAULT_MAX_OUTPUT_TOKENS = 8192
 API_RETRY_ATTEMPTS = 5
 API_RETRY_BASE_SEC = 2.0
 
@@ -176,20 +176,39 @@ def _generate_once(client, model, prompt, *, cap, temperature, top_p, frequency_
     )
 
 
-def _looks_truncated(text, response):
-    reason = _finish_reason(response)
-    if reason is not None and "MAX_TOKENS" in str(reason).upper():
-        return True
-    stripped = (text or "").strip()
-    if len(stripped) < 80:
-        return True
+def _visible_prose_for_truncation_check(text):
+    """Strip simulation tags before judging whether player-facing prose ended cleanly."""
+    try:
+        from simulation.narrator_facts import strip_narrator_facts
+        return strip_narrator_facts(text or "")
+    except Exception:
+        return (text or "").strip()
+
+
+def _prose_ends_cleanly(stripped):
+    if not stripped or len(stripped) < 80:
+        return False
     if stripped[-1] not in ".!?\"":
-        return True
+        return False
     if re.search(
         r"\b(your|the|a|an|to|with|and|or|of|in|on|at|for|from|that|this|their|you)\s*$",
         stripped,
         re.I,
     ):
+        return False
+    return True
+
+
+def _looks_truncated(text, response):
+    visible = _visible_prose_for_truncation_check(text)
+    reason = _finish_reason(response)
+    if reason is not None and "MAX_TOKENS" in str(reason).upper():
+        # Gemini 3.x often sets MAX_TOKENS when thinking shares the output budget,
+        # even though visible prose finished on a complete sentence.
+        if _prose_ends_cleanly(visible) and len(visible) >= 200:
+            return False
+        return True
+    if not _prose_ends_cleanly(visible):
         return True
     return False
 

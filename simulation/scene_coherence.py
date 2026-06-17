@@ -29,6 +29,28 @@ _TALK_NAMED = re.compile(
 _ASK_FOR = re.compile(r"^\s*ask\s+(.+)$", re.I)
 
 
+_RELOCATION_DIRECTIVE = (
+    " RELOCATION — prior focal NPC does NOT follow into this sub-place. "
+    "They remain behind unless SCENE FACTS list them present here."
+)
+
+
+def mark_scene_relocation(player, action_ctx):
+    """
+    Flag a place/sub-place change so cast resets and prior NPCs stay behind.
+    Call whenever resolve_local_movement or travel promotion changes scene_subplace.
+    """
+    prior_ids = list((player.get("scene_cast") or {}).get("ids") or [])
+    if prior_ids:
+        action_ctx["left_behind_cast"] = prior_ids
+    player["scene_focus"] = None
+    action_ctx["target_id"] = None
+    action_ctx["relocated"] = True
+    action_ctx["story_directive"] = (
+        action_ctx.get("story_directive", "") + _RELOCATION_DIRECTIVE
+    ).strip()
+
+
 def resolve_travel_destination(action, player, current_area, dests, areas):
     """
     Pick a travel destination from the area graph, or a sub-place within the current area.

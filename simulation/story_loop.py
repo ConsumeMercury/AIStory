@@ -22,6 +22,7 @@ from simulation.scene_coherence import (
     resolve_target_and_absence,
     resolve_travel_destination,
     place_label,
+    mark_scene_relocation,
     DIALOGUE_KINDS,
 )
 from simulation.local_places import resolve_local_movement, record_narrator_places
@@ -722,18 +723,8 @@ def process_player_action(action, *, on_prose_chunk=None):
     if kind == "approach":
         sub, local_msg = resolve_local_movement(action, player, player.get("area"))
         if sub:
-            prior_ids = list((player.get("scene_cast") or {}).get("ids") or [])
-            if prior_ids:
-                action_ctx["left_behind_cast"] = prior_ids
+            mark_scene_relocation(player, action_ctx)
             extra_directive = local_msg
-            player["scene_focus"] = None
-            action_ctx["target_id"] = None
-            action_ctx["relocated"] = True
-            action_ctx["story_directive"] = (
-                action_ctx.get("story_directive", "")
-                + " RELOCATION — prior focal NPC does NOT follow into this sub-place. "
-                "They remain behind unless SCENE FACTS list them present here."
-            ).strip()
             with state_lock():
                 save(PLAYER_FILE, player)
             scene_state, present, area_present = _refresh_scene(
@@ -760,10 +751,16 @@ def process_player_action(action, *, on_prose_chunk=None):
             action, player, player.get("area"), dests, areas_data,
         )
         if subplace:
+            mark_scene_relocation(player, action_ctx)
             extra_directive = travel_msg
             with state_lock():
                 save(PLAYER_FILE, player)
+            scene_state, present, area_present = _refresh_scene(
+                player, npcs, world, action_ctx, tick, persist=False,
+            )
         elif chosen:
+            mark_scene_relocation(player, action_ctx)
+            action_ctx["travel_arrival"] = True
             travel_before = snapshot_before_travel()
             ok, msg, hours, _ = travel(chosen, simulation_runner._run_tick)
             with state_lock():
@@ -776,8 +773,8 @@ def process_player_action(action, *, on_prose_chunk=None):
             present = _present_npcs(npcs, player)
             area_present = present
             scene_state, present, area_present = _refresh_scene(
-            player, npcs, world, action_ctx, tick, persist=False,
-        )
+                player, npcs, world, action_ctx, tick, persist=False,
+            )
             sync_scene_focus(player, present, npcs)
             digest = build_arrival_digest(travel_before, chosen)
             extra_directive = msg + " " + digest

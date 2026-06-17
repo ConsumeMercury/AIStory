@@ -52,6 +52,18 @@ def should_reset_scene_cast(action_ctx, player):
     return False
 
 
+def _exclude_cast_ids(action_ctx, player):
+    """NPC ids that must not carry over after relocation or place-key change."""
+    exclude = set(action_ctx.get("left_behind_cast") or [])
+    stored = player.get("scene_cast") or {}
+    area, sub = _place_key(player)
+    if action_ctx.get("relocated") or action_ctx.get("travel_arrival"):
+        exclude.update(stored.get("ids") or [])
+    elif stored.get("area") and (stored.get("area") != area or stored.get("subplace") != sub):
+        exclude.update(stored.get("ids") or [])
+    return exclude
+
+
 def bootstrap_scene_cast(all_present, player, action_ctx, npcs, *, max_cast=MAX_SCENE_CAST):
     """Pick a bounded cast for a new scene — not the entire district population."""
     if not all_present:
@@ -64,12 +76,7 @@ def bootstrap_scene_cast(all_present, player, action_ctx, npcs, *, max_cast=MAX_
         reverse=True,
     )
     ids = []
-    exclude = set()
-    if action_ctx.get("relocated") or action_ctx.get("left_behind_cast"):
-        exclude.update(action_ctx.get("left_behind_cast") or [])
-        old = player.get("scene_cast") or {}
-        if action_ctx.get("relocated"):
-            exclude.update(old.get("ids") or [])
+    exclude = _exclude_cast_ids(action_ctx, player)
     for prefer in (
         action_ctx.get("target_id"),
         player.get("scene_focus"),
@@ -106,6 +113,8 @@ def resolve_scene_present(all_present, player, action_ctx, npcs):
 
     for prefer in (action_ctx.get("target_id"), player.get("scene_focus")):
         if prefer and prefer in by_id and prefer not in {n["id"] for n in filtered}:
+            if prefer in _exclude_cast_ids(action_ctx, player):
+                continue
             filtered.append(by_id[prefer])
 
     if action_ctx.get("clarification_resolved") and action_ctx.get("target_id"):
@@ -133,7 +142,8 @@ def persist_scene_cast(player, scene_present, action_ctx):
     area, sub = _place_key(player)
     ids = [n["id"] for n in scene_present]
     tid = action_ctx.get("target_id")
-    if tid and tid not in ids:
+    left = set(action_ctx.get("left_behind_cast") or [])
+    if tid and tid not in ids and tid not in left:
         ids.append(tid)
     player["scene_cast"] = {
         "area": area,

@@ -202,3 +202,40 @@ def test_json_truncation_allows_brace_endings():
     assert _looks_truncated_json('{"title": "Test", "hooks": ["a"]}', None) is False
     assert _looks_truncated_json('[{"persona": {}}]', None) is False
     assert _looks_truncated_json('{"title": "Test"', None) is True
+
+
+def test_prose_truncation_ignores_trailing_fact_tags():
+    from simulation.gemini_client import _looks_truncated
+
+    raw = (
+        "Rain slickens the greasy cobblestones of the market square, turning the discarded "
+        "cabbage leaves into a slick paste that smells of wet wool and charred fat. "
+        "She keeps her shoulder slightly turned, her posture alert to the silence of the empty market.\n"
+        "[FACT: speaking | g1]"
+    )
+    assert _looks_truncated(raw, None) is False
+
+
+def test_max_tokens_finish_with_clean_prose_not_truncated():
+    from simulation.gemini_client import _looks_truncated
+
+    class _Cand:
+        finish_reason = "MAX_TOKENS"
+
+    class _Resp:
+        candidates = [_Cand()]
+
+    visible = (
+        "Rain slickens the greasy cobblestones of the market square, turning the discarded "
+        "cabbage leaves into a slick paste that smells of wet wool and charred fat under the "
+        "dripping eaves. She keeps her shoulder slightly turned, her posture alert to the "
+        "silence of the empty market."
+    )
+    assert len(visible) >= 200
+    assert _looks_truncated(visible, _Resp()) is False
+
+
+def test_prose_truncation_still_flags_mid_sentence():
+    from simulation.gemini_client import _looks_truncated
+
+    assert _looks_truncated("The rain fell on the", None) is True

@@ -203,6 +203,65 @@ def test_explore_hook_skips_left_behind():
     assert hook["id"] == "scraper"
 
 
+def test_travel_subplace_relocation_excludes_prior_focal():
+    from simulation.scene_coherence import resolve_travel_destination, mark_scene_relocation
+
+    priest = _npc("p1", role="priest", name="Priest")
+    priest["key_npc"] = True
+    area = [priest, _npc("x1"), _npc("x2"), _npc("x3")]
+    npcs = {n["id"]: n for n in area}
+    player = {
+        "area": "embermoor:docks",
+        "scene_subplace": None,
+        "scene_focus": "p1",
+        "scene_cast": {
+            "area": "embermoor:docks",
+            "subplace": None,
+            "ids": ["p1"],
+        },
+        "journal": [{
+            "area": "embermoor:docks",
+            "scene": "Meet at the new customs house on the north slipway.",
+        }],
+        "narrator_places": {},
+        "story_flags": {},
+    }
+    _chosen, sub, _msg = resolve_travel_destination(
+        "go to the new customs house on the north slipway",
+        player,
+        "embermoor:docks",
+        {},
+        {},
+    )
+    assert sub
+    ctx = {"kind": "travel"}
+    mark_scene_relocation(player, ctx)
+    assert ctx.get("relocated")
+    assert "p1" in (ctx.get("left_behind_cast") or [])
+    present = resolve_scene_present(area, player, ctx, npcs)
+    assert "p1" not in {n["id"] for n in present}
+
+
+def test_subplace_mismatch_excludes_prior_cast_without_reloc_flag():
+    priest = _npc("p1", role="priest", name="Priest")
+    priest["key_npc"] = True
+    area = [priest, _npc("x1"), _npc("x2")]
+    npcs = {n["id"]: n for n in area}
+    player = {
+        "area": "embermoor:docks",
+        "scene_subplace": {"id": "customs_house", "label": "Customs house"},
+        "scene_focus": "p1",
+        "scene_cast": {
+            "area": "embermoor:docks",
+            "subplace": None,
+            "ids": ["p1"],
+        },
+        "known_npcs": {},
+    }
+    present = resolve_scene_present(area, player, {}, npcs)
+    assert "p1" not in {n["id"] for n in present}
+
+
 def test_clarification_directive_binds_identity():
     npc = _npc("g1", role="guard", name="Kasah Stonehand")
     text = build_clarification_identity_directive(npc)

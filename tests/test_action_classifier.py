@@ -71,5 +71,31 @@ def test_mock_classifier_on_mode(monkeypatch):
     monkeypatch.delenv("AISTORY_MOCK_CLASSIFIER_JSON", raising=False)
 
 
+def test_classifier_failure_surfaces_error(monkeypatch):
+    monkeypatch.setenv("AISTORY_ACTION_CLASSIFIER", "shadow")
+
+    def _fail_llm(*_a, **_k):
+        return "not json at all"
+
+    monkeypatch.setattr(
+        "simulation.gemini_client.generate_text",
+        _fail_llm,
+    )
+    scene = _scene("g1")
+    ctx = {"kind": "general", "target_id": None, "player_speech": None}
+    out = apply_classifier_to_ctx(
+        "ask the guard when the carriage clears",
+        {"known_npcs": {}},
+        list(scene.cast),
+        {"g1": scene.cast[0]},
+        ctx,
+        scene,
+    )
+    bc = out.get("boundary_classifier") or {}
+    assert bc.get("invoked")
+    assert bc.get("skip_reason") == "classifier_failed"
+    assert bc.get("error")
+
+
 def test_classifier_off_by_default():
     assert classifier_mode() == "off" or os.environ.get("AISTORY_ACTION_CLASSIFIER")

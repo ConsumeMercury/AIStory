@@ -29,6 +29,38 @@ setup_logging()
 UI_DIR = BASE_DIR / "ui"
 
 
+def _gemini_user_message(exc):
+    """Turn Gemini/client failures into player-facing text (no stack traces)."""
+    msg = str(exc).strip() or exc.__class__.__name__
+    low = msg.lower()
+    if "api key not valid" in low or "api_key_invalid" in low:
+        return (
+            "Gemini rejected your API key. Check GEMINI_API_KEY in .env "
+            "(https://aistudio.google.com/apikey) and restart the server."
+        )
+    if "missing api key" in low:
+        return (
+            "Set GEMINI_API_KEY in .env (see .env.example) and restart the server."
+        )
+    return msg
+
+
+def _try_opening_scene():
+    """Return (scene_text|None, error_message|None). Never raises."""
+    import logging
+    from simulation.story_loop import generate_opening_scene
+
+    log = logging.getLogger(__name__)
+    try:
+        scene = generate_opening_scene()
+    except Exception as exc:
+        log.exception("Opening scene generation failed")
+        return None, _gemini_user_message(exc)
+    if not scene:
+        return None, None
+    return scene, None
+
+
 @asynccontextmanager
 async def lifespan(app):
     from game.bootstrap import start_bootstrap, stop_bootstrap
@@ -51,7 +83,7 @@ def create_app():
     from pydantic import BaseModel
 
     from simulation.gemini_client import api_key
-    from simulation.story_loop import process_player_action, generate_opening_scene
+    from simulation.story_loop import process_player_action
     from simulation.ui_state import get_full_state, snapshot_for_delta, build_turn_metadata, HELP_COMMANDS
     from simulation.action_hints import build_action_hints, collect_action_suggestions
     from simulation import simulation_runner
@@ -214,7 +246,19 @@ def create_app():
                 "state": get_full_state(),
             }
 
-        scene = generate_opening_scene()
+        scene, err = _try_opening_scene()
+        if err:
+            return {
+                "scene": None,
+                "message": f"Character created, but the opening scene failed: {err}",
+                "state": get_full_state(),
+            }
+        if not scene:
+            return {
+                "scene": None,
+                "message": "Character created.",
+                "state": get_full_state(),
+            }
         return _action_response("look around", scene)
 
     @app.get("/api/health")
@@ -304,7 +348,11 @@ def create_app():
         player = load("player/player.json", {})
         if player.get("journal"):
             return {"scene": None, "skipped": True, "state": get_full_state()}
-        scene = generate_opening_scene()
+        scene, err = _try_opening_scene()
+        if err:
+            raise HTTPException(status_code=503, detail=err) from None
+        if not scene:
+            return {"scene": None, "skipped": True, "state": get_full_state()}
         return _action_response("look around", scene)
 
     def _is_meta_action(text):
@@ -347,7 +395,7 @@ def create_app():
         try:
             scene = process_player_action(text)
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
+            raise HTTPException(status_code=503, detail=_gemini_user_message(exc)) from exc
 
         return _action_response(text, scene, meta_only=meta_only, before=before)
 
@@ -393,7 +441,7 @@ def create_app():
                 payload["type"] = "done"
                 events.put(payload)
             except Exception as exc:
-                events.put({"type": "error", "detail": str(exc)})
+                events.put({"type": "error", "detail": _gemini_user_message(exc)})
             finally:
                 events.put(None)
 

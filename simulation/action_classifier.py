@@ -93,25 +93,46 @@ def _parse_json(text):
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
+        text = text.strip()
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        m = re.search(r"\{[^{}]*\}", text, re.S)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except json.JSONDecodeError:
-                pass
+        pass
+    start = text.find("{")
+    if start >= 0:
+        depth = 0
+        for i, ch in enumerate(text[start:], start):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start:i + 1])
+                    except json.JSONDecodeError:
+                        break
+    m = re.search(r"\{[^{}]*\}", text, re.S)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except json.JSONDecodeError:
+            pass
     return None
 
 
 def validate_classifier_result(raw, scene):
     """Reject fabricated ids/kinds — return sanitized dict or None."""
+    validated, _reason = validate_classifier_result_with_reason(raw, scene)
+    return validated
+
+
+def validate_classifier_result_with_reason(raw, scene):
+    """Like validate_classifier_result but returns (result, error_reason)."""
     if not raw or not isinstance(raw, dict):
-        return None
+        return None, "not_a_dict"
     kind = normalize_kind(raw.get("kind"))
     if not kind:
-        return None
+        return None, f"invalid_kind:{raw.get('kind')!r}"
     target_id = raw.get("target_id")
     if target_id is not None:
         target_id = str(target_id).strip()
@@ -128,18 +149,19 @@ def validate_classifier_result(raw, scene):
         "target_id": target_id,
         "player_speech": speech,
         "time_target": time_target,
-    }
+    }, None
 
 
 def classify_action_llm(action, scene, player, regex_ctx):
-    """Call Gemini for structured interpretation; None on failure."""
+    """Call Gemini for structured interpretation. Returns (validated|None, error|None)."""
     mock = _mock_classifier_json()
     if mock:
-        return validate_classifier_result(_parse_json(mock), scene)
+        validated, err = validate_classifier_result_with_reason(_parse_json(mock), scene)
+        return validated, err
     if classifier_mode() == "off":
-        return None
+        return None, None
     if not needs_llm_classifier(action, regex_ctx, scene):
-        return None
+        return None, None
     try:
         from simulation.gemini_client import generate_text
         prompt = _build_prompt(action, scene, player, regex_ctx)
@@ -150,11 +172,18 @@ def classify_action_llm(action, scene, player, regex_ctx):
             max_tokens=512,
             json_output=True,
         )
+        if not (text or "").strip():
+            return None, "empty_llm_response"
         parsed = _parse_json(text)
-        return validate_classifier_result(parsed, scene)
+        if not parsed:
+            return None, f"json_parse_failed:{text[:160]}"
+        validated, reason = validate_classifier_result_with_reason(parsed, scene)
+        if not validated:
+            return None, reason or "validation_rejected"
+        return validated, None
     except Exception as e:
         log.debug("Action classifier failed: %s", e)
-        return None
+        return None, str(e)[:200]
 
 
 def _log_shadow_diff(action, regex_ctx, validated):
@@ -207,16 +236,11 @@ def apply_classifier_to_ctx(action, player, present_npcs, npcs, regex_ctx, scene
         return regex_ctx
 
     bc["invoked"] = True
-    try:
-        validated = classify_action_llm(action, scene, player, regex_ctx)
-    except Exception as e:
-        bc["error"] = str(e)[:200]
-        bc["skip_reason"] = "classifier_error"
-        regex_ctx["boundary_classifier"] = bc
-        return regex_ctx
+    validated, fail_reason = classify_action_llm(action, scene, player, regex_ctx)
 
     if not validated:
         bc["skip_reason"] = "classifier_failed"
+        bc["error"] = fail_reason
         regex_ctx["boundary_classifier"] = bc
         return regex_ctx
 
