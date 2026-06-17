@@ -1370,6 +1370,20 @@ def process_player_action(action, *, on_prose_chunk=None):
         player["journal"] = player["journal"][-300:]
         save(PLAYER_FILE, player)
 
+    if scene:
+        from simulation.prose_auditor import schedule_deferred_shadow_audit
+        schedule_deferred_shadow_audit(
+            scene,
+            tick=tick,
+            player=player,
+            npcs=npcs,
+            scene_state=scene_state,
+            action_ctx=action_ctx,
+            focal_npc_id=focal_id,
+            scene_place=scene_place,
+            present_npcs=focus_npcs,
+        )
+
     record_turn(
         action=action,
         kind=kind,

@@ -11,10 +11,13 @@ import json
 import logging
 import os
 import re
+import threading
 
 from simulation.auditor_confirm import VALID_NOMINATION_TYPES
 
 log = logging.getLogger(__name__)
+
+PLAYER_FILE = "player/player.json"
 
 _AUDITOR_MODES = frozenset({"off", "shadow", "on"})
 
@@ -28,6 +31,17 @@ _AUDIT_KINDS = frozenset({
 def auditor_mode():
     raw = (os.environ.get("AISTORY_PROSE_AUDITOR") or "off").strip().lower()
     return raw if raw in _AUDITOR_MODES else "off"
+
+
+def auditor_runs_inline():
+    """
+    Shadow mode defers the LLM audit to a background thread by default.
+    On mode always runs inline because confirmed nominations gate regeneration.
+    Set AISTORY_AUDITOR_SYNC=1 to force synchronous shadow audits (debug only).
+    """
+    if auditor_mode() != "shadow":
+        return True
+    return os.environ.get("AISTORY_AUDITOR_SYNC", "").strip().lower() in ("1", "true", "yes")
 
 
 def _mock_auditor_json():
@@ -183,7 +197,7 @@ def audit_prose_llm(
         return None
 
 
-def run_prose_audit(
+def _execute_prose_audit(
     text,
     *,
     player,
@@ -194,31 +208,17 @@ def run_prose_audit(
     scene_place,
     present_npcs,
 ):
-    """
-    Run auditor + deterministic confirm.
-    Returns (confirmed_issues, meta) where meta tracks shadow/on stats.
-    """
+    """Run LLM audit + deterministic confirm. Returns (confirmed_issues, meta)."""
     mode = auditor_mode()
-    should, skip_reason = should_audit_prose(
-        action_ctx, scene_state, text, focal_npc_id=focal_npc_id,
-    )
     meta = {
         "mode": mode,
-        "invoked": False,
-        "skip_reason": skip_reason,
+        "invoked": True,
+        "skip_reason": None,
         "nominations": 0,
         "confirmed": 0,
         "dropped": 0,
         "error": None,
     }
-    if mode == "off" or not should:
-        return [], meta
-
-    if (action_ctx or {}).get("prose_retry", 0) > 0:
-        meta["skip_reason"] = "regen_retry"
-        return [], meta
-
-    meta["invoked"] = True
     nominations = audit_prose_llm(
         text,
         player=player,
@@ -261,3 +261,109 @@ def run_prose_audit(
         return [], meta
 
     return confirmed, meta
+
+
+def run_prose_audit(
+    text,
+    *,
+    player,
+    npcs,
+    scene_state,
+    action_ctx,
+    focal_npc_id,
+    scene_place,
+    present_npcs,
+):
+    """
+    Run auditor + deterministic confirm.
+    Returns (confirmed_issues, meta) where meta tracks shadow/on stats.
+    """
+    mode = auditor_mode()
+    should, skip_reason = should_audit_prose(
+        action_ctx, scene_state, text, focal_npc_id=focal_npc_id,
+    )
+    meta = {
+        "mode": mode,
+        "invoked": False,
+        "skip_reason": skip_reason,
+        "nominations": 0,
+        "confirmed": 0,
+        "dropped": 0,
+        "error": None,
+    }
+    if mode == "off" or not should:
+        return [], meta
+
+    if (action_ctx or {}).get("prose_retry", 0) > 0:
+        meta["skip_reason"] = "regen_retry"
+        return [], meta
+
+    if mode == "shadow" and not auditor_runs_inline():
+        meta["skip_reason"] = "deferred_async"
+        return [], meta
+
+    return _execute_prose_audit(
+        text,
+        player=player,
+        npcs=npcs,
+        scene_state=scene_state,
+        action_ctx=action_ctx,
+        focal_npc_id=focal_npc_id,
+        scene_place=scene_place,
+        present_npcs=present_npcs,
+    )
+
+
+def schedule_deferred_shadow_audit(
+    text,
+    *,
+    tick,
+    player,
+    npcs,
+    scene_state,
+    action_ctx,
+    focal_npc_id,
+    scene_place,
+    present_npcs,
+):
+    """
+    Run shadow auditor after the beat returns — updates boundary trace when done.
+    Returns True when a background audit was scheduled.
+    """
+    if auditor_mode() != "shadow" or auditor_runs_inline():
+        return False
+    should, _skip = should_audit_prose(
+        action_ctx, scene_state, text, focal_npc_id=focal_npc_id,
+    )
+    if not should or not text:
+        return False
+
+    def _job():
+        try:
+            _confirmed, meta = _execute_prose_audit(
+                text,
+                player=player,
+                npcs=npcs,
+                scene_state=scene_state,
+                action_ctx=action_ctx,
+                focal_npc_id=focal_npc_id,
+                scene_place=scene_place,
+                present_npcs=present_npcs,
+            )
+            from game.state_context import state_lock
+            from simulation.boundary_metrics import patch_boundary_trace_auditor
+            from storage import load, save
+
+            with state_lock():
+                pl = load(PLAYER_FILE, {})
+                patch_boundary_trace_auditor(pl, tick=tick, auditor_meta=meta)
+                save(PLAYER_FILE, pl)
+        except Exception as exc:
+            log.warning("Deferred shadow audit failed (tick=%s): %s", tick, exc)
+
+    threading.Thread(
+        target=_job,
+        daemon=True,
+        name=f"shadow-audit-{tick}",
+    ).start()
+    return True

@@ -92,6 +92,7 @@ def test_auditor_on_mode_with_mock(monkeypatch):
 
 def test_auditor_shadow_does_not_return_issues(monkeypatch):
     monkeypatch.setenv("AISTORY_PROSE_AUDITOR", "shadow")
+    monkeypatch.setenv("AISTORY_AUDITOR_SYNC", "1")
     monkeypatch.setenv(
         "AISTORY_MOCK_PROSE_AUDITOR_JSON",
         '{"violations":[{"type":"speaker_not_in_cast","role_hint":"priest","quote":"priest spoke"}]}',
@@ -110,6 +111,38 @@ def test_auditor_shadow_does_not_return_issues(monkeypatch):
     assert not confirmed
     assert meta.get("confirmed", 0) >= 1
     monkeypatch.delenv("AISTORY_MOCK_PROSE_AUDITOR_JSON", raising=False)
+    monkeypatch.delenv("AISTORY_AUDITOR_SYNC", raising=False)
+
+
+def test_auditor_shadow_defers_by_default(monkeypatch):
+    monkeypatch.setenv("AISTORY_PROSE_AUDITOR", "shadow")
+    monkeypatch.delenv("AISTORY_AUDITOR_SYNC", raising=False)
+    monkeypatch.setenv(
+        "AISTORY_MOCK_PROSE_AUDITOR_JSON",
+        '{"violations":[{"type":"speaker_not_in_cast","role_hint":"priest","quote":"priest spoke"}]}',
+    )
+    scene = _scene(["g1"])
+    confirmed, meta = run_prose_audit(
+        _LONG,
+        player={"area": "hq"},
+        npcs={"g1": {"id": "g1", "role": "guard", "status": "alive"}},
+        scene_state=scene,
+        action_ctx={"kind": "talk"},
+        focal_npc_id="g1",
+        scene_place="Gate",
+        present_npcs=list(scene.cast),
+    )
+    assert not confirmed
+    assert meta.get("skip_reason") == "deferred_async"
+    assert not meta.get("invoked")
+    monkeypatch.delenv("AISTORY_MOCK_PROSE_AUDITOR_JSON", raising=False)
+
+
+def test_regen_governor_skips_low_priority():
+    issues = ["scene too short or empty"]
+    _ranked, should_retry, meta = apply_regen_governor(issues, attempt=0)
+    assert not should_retry
+    assert meta.get("skip_reason") == "below_min_priority"
 
 
 def test_regen_governor_respects_priority():

@@ -171,6 +171,7 @@ def build_output_boundary(
         "auditor_confirmed": am.get("confirmed", 0),
         "auditor_dropped": am.get("dropped", 0),
         "auditor_mode": am.get("mode", "off"),
+        "auditor_skip_reason": am.get("skip_reason"),
         "prose_retry": prose_retry or 0,
         "regenerated": bool(prose_retry),
         "regen_exhausted": bool(rg.get("exhausted")),
@@ -435,6 +436,7 @@ def persist_boundary_trace(
             "nominations": turn_boundary.get("auditor_nominations"),
             "confirmed": turn_boundary.get("auditor_confirmed"),
             "dropped": turn_boundary.get("auditor_dropped"),
+            "skip_reason": turn_boundary.get("auditor_skip_reason") or ba.get("skip_reason"),
             "dropped_samples": ba.get("dropped_samples") or [],
         },
         "facts": turn_boundary.get("facts") or {},
@@ -458,3 +460,49 @@ def persist_boundary_trace(
         player["boundary_history"] = hist[-cap:]
     else:
         player["boundary_history"] = []
+
+
+def patch_boundary_trace_auditor(player, *, tick, auditor_meta):
+    """Backfill deferred shadow auditor metrics on the saved boundary trace."""
+    if player is None or not auditor_meta:
+        return False
+
+    def _apply(detail):
+        if not detail or detail.get("tick") != tick:
+            return False
+        aud = detail.setdefault("auditor", {})
+        aud.update({
+            "mode": auditor_meta.get("mode"),
+            "invoked": bool(auditor_meta.get("invoked")),
+            "nominations": auditor_meta.get("nominations", 0),
+            "confirmed": auditor_meta.get("confirmed", 0),
+            "dropped": auditor_meta.get("dropped", 0),
+            "skip_reason": auditor_meta.get("skip_reason"),
+            "dropped_samples": auditor_meta.get("dropped_samples") or [],
+        })
+        boundary = detail.setdefault("boundary", {})
+        boundary["auditor_mode"] = auditor_meta.get("mode")
+        boundary["auditor_invoked"] = bool(auditor_meta.get("invoked"))
+        boundary["auditor_nominations"] = auditor_meta.get("nominations", 0)
+        boundary["auditor_confirmed"] = auditor_meta.get("confirmed", 0)
+        boundary["auditor_dropped"] = auditor_meta.get("dropped", 0)
+        boundary["auditor_skip_reason"] = auditor_meta.get("skip_reason")
+        return True
+
+    patched = _apply(player.get("last_boundary_trace"))
+    if not patched:
+        for entry in reversed(player.get("boundary_history") or []):
+            if _apply(entry):
+                patched = True
+                break
+
+    if patched and auditor_meta.get("invoked"):
+        stats = player.setdefault("boundary_session", {})
+        stats["auditor_invoked"] = stats.get("auditor_invoked", 0) + 1
+        stats["auditor_nominations"] = (
+            stats.get("auditor_nominations", 0) + auditor_meta.get("nominations", 0)
+        )
+        stats["auditor_confirmed"] = (
+            stats.get("auditor_confirmed", 0) + auditor_meta.get("confirmed", 0)
+        )
+    return patched
