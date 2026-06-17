@@ -486,6 +486,54 @@ def test_scene_cast_absent():
     assert "NOT" in note
 
 
+def test_confirming_playtest_smoke():
+    from simulation.action_interpreter import interpret_action
+    from simulation.target_resolution import resolve_action_target
+    from simulation.scheduled_events import (
+        record_scheduled_events,
+        parse_wait_for_event,
+        fire_due_events,
+    )
+    from simulation.world_clock import resolve_wait_advance
+
+    def _sch(nid, gender):
+        return {
+            "id": nid, "role": "scholar", "gender": gender, "status": "alive",
+            "physique": {"build": "barrel-chested" if gender == "male" else "wiry"},
+        }
+
+    nedkin = _sch("n1", "male")
+    zaim = _sch("z1", "female")
+    player = {"scene_focus": "n1", "known_npcs": {}, "journal": [{"focus_npc": "n1"}]}
+    assert resolve_action_target(
+        "Ask the scholar about the archives", player, [nedkin, zaim], kind="ask_about",
+    )["id"] == "n1"
+
+    ctx = interpret_action(
+        "ask the scholar what the boy found", player, [nedkin, zaim], {},
+    )
+    assert ctx.get("player_speech") is None
+
+    player = {"scheduled_events": {}}
+    world = {"hour_count": 10, "hour": 10}
+    scene = (
+        "They use the coal-chutes.\n"
+        "[SCHEDULE: coal_chute_entry | the junior boys enter through the coal-chutes | +2h]"
+    )
+    assert record_scheduled_events(player, scene, "city:hq", world)
+    event = parse_wait_for_event(
+        "Wait for the junior boys to enter through the coal-chutes", player, "city:hq",
+    )
+    assert event
+    result = resolve_wait_advance(
+        "Wait for the junior boys to enter through the coal-chutes", world, player, "city:hq",
+    )
+    assert result.get("event")
+    world["hour_count"] = 12
+    fired = fire_due_events(player, world, "city:hq")
+    assert fired
+
+
 def main():
     tests = [
         test_event_buffer,
@@ -510,6 +558,7 @@ def main():
         test_action_hints,
         test_hunting_guild,
         test_npc_bonds_and_familiarity,
+        test_confirming_playtest_smoke,
     ]
     for fn in tests:
         fn()

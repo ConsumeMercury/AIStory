@@ -259,6 +259,8 @@ def test_simulation_audit():
             ("withdraw_clears_focus", audit.audit_withdraw_clears_focus),
             ("focal_id_integrity", audit.audit_focal_id_integrity),
             ("travel_failed_empty_cast", audit.audit_travel_failed_empty_cast),
+            ("same_role_scholar_focus", audit.audit_same_role_scholar_focus),
+            ("scheduled_event_fires_on_wait", audit.audit_scheduled_event_fires_on_wait),
         ]:
             fn()
     finally:

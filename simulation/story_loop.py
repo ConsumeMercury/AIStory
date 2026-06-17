@@ -1127,13 +1127,15 @@ def process_player_action(action, *, on_prose_chunk=None):
 
     action_ctx["presence_facts"] = build_scene_presence_facts(present, action_ctx)
 
+    scene_action = replay_action if action_ctx.get("clarification_resolved") else action
+
     if action_ctx.get("target_ambiguous"):
         pending = player.get("pending_target_clarification") or {}
         scene = build_clarification_scene(pending)
         prose_issues = []
     else:
         scene, prose_issues = _generate_scene_with_validation(
-            action=action,
+            action=scene_action,
             world=world,
             player=player,
             focus_npcs=focus_npcs,

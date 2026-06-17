@@ -388,6 +388,109 @@ def audit_travel_failed_inherits_focus():
     )
 
 
+def _inject_audit_scholars(player, npcs):
+    from storage import save
+
+    area = player.get("area")
+    if not area:
+        raise RuntimeError("player has no area for scholar audit")
+    npcs["audit_scholar_a"] = {
+        "id": "audit_scholar_a",
+        "name": "Nedkin Audit",
+        "role": "scholar",
+        "gender": "male",
+        "status": "alive",
+        "area": area,
+        "location": player.get("location"),
+        "physique": {"build": "barrel-chested", "presentation": 50},
+    }
+    npcs["audit_scholar_b"] = {
+        "id": "audit_scholar_b",
+        "name": "Zaim Audit",
+        "role": "scholar",
+        "gender": "female",
+        "status": "alive",
+        "area": area,
+        "location": player.get("location"),
+        "physique": {"build": "wiry", "presentation": 55},
+    }
+    player["scene_focus"] = "audit_scholar_a"
+    player["journal"] = [{
+        "focus_npc": "audit_scholar_a",
+        "kind": "talk",
+        "area": area,
+    }]
+    save("characters/npcs.json", npcs)
+    save("player/player.json", player)
+
+
+def audit_same_role_scholar_focus():
+    """Two scholars present — focal scholar must not swap across beats."""
+    from storage import load
+
+    _reset_player_baseline()
+    player = load("player/player.json", {})
+    npcs = load("characters/npcs.json", {})
+    _inject_audit_scholars(player, npcs)
+    CAPTURED.clear()
+    _run_sequence([
+        "Ask the scholar about the archives",
+        "Wait until dawn",
+        "Ask the scholar about the preface",
+    ])
+    focal_ids = [c.get("focal_npc_id") for c in CAPTURED if c.get("focal_npc_id")]
+    _assert(len(focal_ids) >= 2, f"expected multiple beats with focal npc: {CAPTURED}")
+    _assert(
+        all(fid == "audit_scholar_a" for fid in focal_ids),
+        f"same-role focus should stay on audit_scholar_a, got {focal_ids}",
+    )
+
+
+def audit_scheduled_event_fires_on_wait():
+    """Recorded schedule promise fires on the wait action, not a later beat."""
+    from storage import load, save
+
+    _reset_player_baseline()
+    player = load("player/player.json", {})
+    npcs = load("characters/npcs.json", {})
+    _inject_audit_scholars(player, npcs)
+    area = player.get("area")
+
+    def scene_with_schedule(**kwargs):
+        action = (kwargs.get("player_action") or "").lower()
+        if "wait" not in action and "scholar" in action:
+            return (
+                "He nods at the chute.\n"
+                "[SCHEDULE: coal_chute_entry | the junior boys enter through the coal-chutes | +2h]"
+            )
+        return "[audit scene]"
+
+    from unittest.mock import MagicMock, patch
+    from simulation.story_loop import process_player_action
+
+    CAPTURED.clear()
+    mock_narr = MagicMock()
+    mock_narr.generate_scene.side_effect = lambda **kw: (
+        CAPTURED.append({
+            "action": kw.get("player_action"),
+            "ctx": kw.get("action_context") or {},
+        }) or scene_with_schedule(**kw)
+    )
+    with patch("simulation.story_loop.get_narrator", return_value=mock_narr):
+        process_player_action("Ask the scholar about the back way")
+        player = load("player/player.json", {})
+        store = player.get("scheduled_events", {}).get(area, {})
+        _assert(store, f"scheduled_events empty after promise: {player.get('scheduled_events')}")
+        process_player_action("Wait for the junior boys to enter through the coal-chutes")
+
+    wait_cap = CAPTURED[-1]
+    ctx = wait_cap.get("ctx") or {}
+    _assert(
+        ctx.get("events_fired") or "SCHEDULED EVENT FIRED" in (ctx.get("story_directive") or ""),
+        f"event should fire on wait beat: {ctx}",
+    )
+
+
 def main():
     tests = [
         ("explore_anchor", audit_explore_anchor),
@@ -401,6 +504,8 @@ def main():
         ("focal_id_integrity", audit_focal_id_integrity),
         ("travel_failed_empty_cast", audit_travel_failed_empty_cast),
         ("travel_failed_inherits_focus", audit_travel_failed_inherits_focus),
+        ("same_role_scholar_focus", audit_same_role_scholar_focus),
+        ("scheduled_event_fires_on_wait", audit_scheduled_event_fires_on_wait),
     ]
     failed = []
     for name, fn in tests:
