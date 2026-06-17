@@ -130,8 +130,13 @@ def test_prose_issues_recorded_in_turn_trace(monkeypatch):
         lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(
-        "simulation.story_loop.validate_scene_prose",
-        lambda *args, **kwargs: ["LOCATION LOCK violated: harbor district"],
+        "simulation.story_loop.validate_turn_output",
+        lambda *args, **kwargs: (
+            ["LOCATION LOCK violated: harbor district"],
+            {},
+            ["LOCATION LOCK violated: harbor district"],
+            [],
+        ),
     )
     with patch("simulation.story_loop.get_narrator", return_value=mock_narr):
         with patch("simulation.story_loop.simulation_runner.get_current_tick", return_value=1):

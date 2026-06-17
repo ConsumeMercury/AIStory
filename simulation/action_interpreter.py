@@ -262,7 +262,7 @@ def _target_hint(action, present_npcs, player, npcs=None, kind="general"):
     )
 
 
-def interpret_action(action, player, present_npcs, world, npcs=None):
+def interpret_action(action, player, present_npcs, world, npcs=None, scene_state=None):
     kind = "general"
     for pattern, k in _PATTERNS:
         if pattern.search(action):
@@ -585,5 +585,9 @@ def interpret_action(action, player, present_npcs, world, npcs=None):
         ctx["story_directive"] += " They move carefully."
     if "urgent" in intents:
         ctx["story_directive"] += " Urgency tightens the prose."
+
+    if scene_state is not None:
+        from simulation.action_classifier import apply_classifier_to_ctx
+        apply_classifier_to_ctx(action, player, present_npcs, npcs, ctx, scene_state)
 
     return ctx

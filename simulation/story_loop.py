@@ -28,7 +28,6 @@ from simulation.local_places import resolve_local_movement, record_narrator_plac
 from simulation.generation_guardrails import build_hard_constraints_block, build_misname_directive
 from simulation.prose_validator import (
     log_scene_prose_issues,
-    validate_scene_prose,
     build_prose_correction_block,
     queue_prose_correction,
     prose_retry_limit,
@@ -43,11 +42,10 @@ from simulation.player_identity import (
 )
 from simulation.appearance_impression import record_first_impression
 from simulation.scene_cast import select_scene_cast, pick_name_target
-from simulation.scene_population import (
-    resolve_scene_present,
-    persist_scene_cast,
-    build_clarification_identity_directive,
-)
+from simulation.scene_population import build_clarification_identity_directive
+from simulation.scene_state import assemble_scene_state, present_npcs_in_area
+from simulation.narrator_facts import build_fact_emission_block, strip_narrator_facts
+from simulation.fact_gate import validate_turn_output, build_combined_correction_block
 from simulation.scene_events import maybe_scene_event
 from simulation.immersion_context import (
     format_rumor_whispers, build_player_inner_voice,
@@ -83,7 +81,6 @@ from simulation.scheduled_events import (
     fire_due_events,
     event_fired_directive,
     build_scheduled_events_block,
-    strip_schedule_tags,
 )
 from simulation import simulation_runner
 from simulation.action_resolution import (
@@ -122,18 +119,16 @@ AREAS_FILE = "world/areas.json"
 
 
 def _present_npcs(npcs, player):
-    loc = player.get("location")
-    area = player.get("area")
-    here = []
-    for n in npcs.values():
-        if n.get("status") != "alive":
-            continue
-        ts = n.get("travel_state") or {}
-        if ts.get("hours_remaining", 0) > 0:
-            continue
-        if (area and n.get("area") == area) or n.get("location") == loc:
-            here.append(n)
-    return here
+    return present_npcs_in_area(npcs, player)
+
+
+def _refresh_scene(player, npcs, world, action_ctx, tick, *, areas_data=None, persist=True):
+    """Single refresh path — returns (SceneState, cast_list, area_present_list)."""
+    state = assemble_scene_state(
+        player, npcs, world, action_ctx, tick,
+        areas_data=areas_data, persist=persist,
+    )
+    return state, list(state.cast), list(state.area_present)
 
 
 def _update_known(player, present, tick):
@@ -212,6 +207,7 @@ def _generate_scene_with_validation(
     hard_constraints,
     on_prose_chunk,
     npcs,
+    scene_state=None,
 ):
     """Generate scene prose; retry once when post-validation finds fact violations."""
     kwargs = dict(
@@ -247,7 +243,7 @@ def _generate_scene_with_validation(
     if not scene or len(scene) < 40:
         return scene, []
 
-    issues = validate_scene_prose(
+    issues, _facts, prose_issues, fact_issues = validate_turn_output(
         scene,
         player=player,
         npcs=npcs,
@@ -256,18 +252,19 @@ def _generate_scene_with_validation(
         scene_place=scene_place,
         present_npcs=focus_npcs,
         known_ids=known_ids,
+        scene_state=scene_state,
     )
     retries = prose_retry_limit()
     attempt = 0
     while issues and attempt < retries:
         attempt += 1
-        correction = build_prose_correction_block(issues)
+        correction = build_combined_correction_block(prose_issues, fact_issues)
         merged = ((extra_directive or "") + "\n\n" + correction).strip()
         action_ctx["prose_retry"] = attempt
         scene = get_narrator().generate_scene(
             **{**kwargs, "extra_directive": merged, "on_prose_chunk": None},
         )
-        issues = validate_scene_prose(
+        issues, _facts, prose_issues, fact_issues = validate_turn_output(
             scene,
             player=player,
             npcs=npcs,
@@ -276,6 +273,7 @@ def _generate_scene_with_validation(
             scene_place=scene_place,
             present_npcs=focus_npcs,
             known_ids=known_ids,
+            scene_state=scene_state,
         )
 
     if issues:
@@ -464,11 +462,14 @@ def process_player_action(action, *, on_prose_chunk=None):
         rumors = load(RUMOR_FILE, [])
 
     area_before = player.get("area")
-    area_present = _present_npcs(npcs, player)
     bootstrap_ctx = {}
     if player.get("scene_focus"):
         bootstrap_ctx["target_id"] = player.get("scene_focus")
-    present = resolve_scene_present(area_present, player, bootstrap_ctx, npcs)
+    scene_state = assemble_scene_state(
+        player, npcs, world, bootstrap_ctx, tick, persist=False,
+    )
+    present = list(scene_state.cast)
+    area_present = list(scene_state.area_present)
     sync_scene_focus(player, present, npcs)
 
     forced_kind = None
@@ -486,7 +487,10 @@ def process_player_action(action, *, on_prose_chunk=None):
         clear_pending_clarification(player)
         bootstrap_ctx["target_id"] = clarified_id
         bootstrap_ctx["clarification_resolved"] = True
-        present = resolve_scene_present(area_present, player, bootstrap_ctx, npcs)
+        scene_state = assemble_scene_state(
+            player, npcs, world, bootstrap_ctx, tick, persist=False,
+        )
+        present = list(scene_state.cast)
         with state_lock():
             save(PLAYER_FILE, player)
 
@@ -500,7 +504,9 @@ def process_player_action(action, *, on_prose_chunk=None):
                 save(PLAYER_FILE, player)
                 save(NPC_FILE, npcs)
 
-    action_ctx = interpret_action(replay_action, player, present, world, npcs=npcs)
+    action_ctx = interpret_action(
+        replay_action, player, present, world, npcs=npcs, scene_state=scene_state,
+    )
     kind = action_ctx["kind"]
     from simulation.local_places import looks_like_local_movement
     if looks_like_local_movement(action) and kind in ("general", "explore", "observe"):
@@ -570,7 +576,9 @@ def process_player_action(action, *, on_prose_chunk=None):
             player["scene_focus"] = hook["id"]
             with state_lock():
                 save(PLAYER_FILE, player)
-        present = resolve_scene_present(area_present, player, action_ctx, npcs)
+        scene_state, present, area_present = _refresh_scene(
+            player, npcs, world, action_ctx, tick, persist=False,
+        )
 
     if kind == "find":
         found = resolve_find_person(action, player, present, npcs)
@@ -640,7 +648,9 @@ def process_player_action(action, *, on_prose_chunk=None):
         if pron:
             action_ctx["target_id"] = pron["id"]
 
-    present = resolve_scene_present(area_present, player, action_ctx, npcs)
+    scene_state, present, area_present = _refresh_scene(
+        player, npcs, world, action_ctx, tick, persist=False,
+    )
 
     if (
         not action_ctx.get("target_id")
@@ -691,7 +701,9 @@ def process_player_action(action, *, on_prose_chunk=None):
             ).strip()
             with state_lock():
                 save(PLAYER_FILE, player)
-            present = resolve_scene_present(area_present, player, action_ctx, npcs)
+            scene_state, present, area_present = _refresh_scene(
+            player, npcs, world, action_ctx, tick, persist=False,
+        )
         else:
             action_ctx["approach_failed"] = True
             fail_msg = local_msg or (
@@ -728,7 +740,9 @@ def process_player_action(action, *, on_prose_chunk=None):
                 rumors = load(RUMOR_FILE, [])
             present = _present_npcs(npcs, player)
             area_present = present
-            present = resolve_scene_present(area_present, player, action_ctx, npcs)
+            scene_state, present, area_present = _refresh_scene(
+            player, npcs, world, action_ctx, tick, persist=False,
+        )
             sync_scene_focus(player, present, npcs)
             digest = build_arrival_digest(travel_before, chosen)
             extra_directive = msg + " " + digest
@@ -752,7 +766,9 @@ def process_player_action(action, *, on_prose_chunk=None):
             save(WORLD_FILE, world)
         present = _present_npcs(npcs, player)
         area_present = present
-        present = resolve_scene_present(area_present, player, action_ctx, npcs)
+        scene_state, present, area_present = _refresh_scene(
+            player, npcs, world, action_ctx, tick, persist=False,
+        )
         tid = action_ctx.get("target_id")
         target_npc = npcs.get(tid) if tid else None
         if target_npc and target_npc.get("area") == player.get("area"):
@@ -1029,7 +1045,9 @@ def process_player_action(action, *, on_prose_chunk=None):
             npcs = load(NPC_FILE, {})
             present = _present_npcs(npcs, player)
             area_present = present
-            present = resolve_scene_present(area_present, player, action_ctx, npcs)
+            scene_state, present, area_present = _refresh_scene(
+            player, npcs, world, action_ctx, tick, persist=False,
+        )
             if combat_target:
                 action_ctx["target_id"] = combat_target
                 action_ctx["memory_tag"] = "attack"
@@ -1041,9 +1059,9 @@ def process_player_action(action, *, on_prose_chunk=None):
                 save(PLAYER_FILE, player)
         extra_directive = directive or err or extra_directive
 
-    area_present = _present_npcs(npcs, player)
-    present = resolve_scene_present(area_present, player, action_ctx, npcs)
-    persist_scene_cast(player, present, action_ctx)
+    scene_state, present, area_present = _refresh_scene(
+        player, npcs, world, action_ctx, tick, persist=True,
+    )
     focus_npcs, crowd_note, focal_id = select_scene_cast(present, player, action_ctx)
     with state_lock():
         save(PLAYER_FILE, player)
@@ -1149,6 +1167,9 @@ def process_player_action(action, *, on_prose_chunk=None):
     sched_block = build_scheduled_events_block(player, player.get("area"), world)
     if sched_block:
         hard_constraints = (hard_constraints + "\n" + sched_block).strip()
+    fact_block = build_fact_emission_block(scene_state)
+    if fact_block:
+        hard_constraints = (hard_constraints + "\n" + fact_block).strip()
 
     with state_lock():
         player = load(PLAYER_FILE, {})
@@ -1188,6 +1209,7 @@ def process_player_action(action, *, on_prose_chunk=None):
             hard_constraints=hard_constraints,
             on_prose_chunk=on_prose_chunk,
             npcs=npcs,
+            scene_state=scene_state,
         )
 
     if name_reveal:
@@ -1206,7 +1228,7 @@ def process_player_action(action, *, on_prose_chunk=None):
                 save(PLAYER_FILE, player)
             if record_scheduled_events(player, scene, player.get("area"), world):
                 save(PLAYER_FILE, player)
-            scene = strip_schedule_tags(scene)
+            scene = strip_narrator_facts(scene)
         cache_id = focal_id or action_ctx.get("target_id") or player.get("scene_focus")
         if cache_id and scene:
             if update_npc_narrative_cache(
