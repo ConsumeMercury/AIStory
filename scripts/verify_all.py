@@ -219,14 +219,18 @@ def test_bootstrap_import():
 
 
 def test_generation_report_offline():
+    import scripts.generation_checks as gc
     import scripts.generation_report as rep
     from scripts.generation_checks import FULL_SCENARIOS, backup_saves, restore_saves
 
+    gc._BASELINE_PLAYER = None
+    gc._BASELINE_WORLD = None
     backups = backup_saves()
+    assert backups.get("npcs"), "backup missing npcs — cannot safely run generation report"
     sim_was = rep._pause_background_sim()
     mock_scene = (
-        "You stand at the docks. Rain on the pilings. She watches you, "
-        "a scholar in grey wool. (offline mock scene)"
+        "You stand at the docks. Rain on the pilings. She watches you "
+        "in grey wool. (offline mock scene)"
     )
     try:
         with patch("simulation.story_loop.get_narrator") as mock_get:
@@ -243,9 +247,21 @@ def test_generation_report_offline():
         rep._resume_background_sim(sim_was)
 
 
+def test_world_health_report():
+    import scripts.world_health_report as whr
+    report = whr.run_world_health_report()
+    assert "score" in report
+    assert isinstance(report.get("issues"), list)
+    assert isinstance(report.get("warnings"), list)
+
+
 def test_simulation_audit():
     import scripts.simulation_audit as audit
     from simulation import simulation_runner
+    from game.setup import ensure_world_data, world_data_ready
+
+    if not world_data_ready():
+        ensure_world_data()
     simulation_runner.stop()
     try:
         for name, fn in [
@@ -299,6 +315,7 @@ def main():
             ("investigation_flow", test_investigation_flow),
             ("story_loop_offline", test_story_loop_offline),
             ("generation_report_offline", test_generation_report_offline),
+            ("world_health_report", test_world_health_report),
             ("simulation_audit", test_simulation_audit),
             ("smoke_test", test_smoke_test),
         ]

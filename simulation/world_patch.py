@@ -62,6 +62,10 @@ def ensure_world_extensions():
         attach_secrets(npcs, factions, institutions)
         changed = True
 
+    if npcs:
+        from simulation.secret_activity import enrich_all_secrets
+        enrich_all_secrets(npcs)
+
     if npcs and not any(n.get("personal_objective") for n in npcs.values() if n.get("status") == "alive"):
         attach_personal_objectives(npcs)
         changed = True

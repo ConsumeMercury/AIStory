@@ -131,8 +131,9 @@ def process_pending(player, world, factions=None, institutions=None):
 
         if effects.get("faction_standing_delta"):
             fid = None
-            if npc.get("institution"):
-                inst = institutions.get(npc["institution"].get("id"), {})
+            inst_ref = npc.get("institution")
+            if isinstance(inst_ref, dict):
+                inst = institutions.get(inst_ref.get("id"), {})
                 fid = institution_faction(inst, factions)
             if not fid:
                 for f in factions.values():

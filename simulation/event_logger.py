@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone
 
 from storage import load, save
+from simulation.event_importance import score_event_importance
 
 EVENT_FILE = "events/event_log.json"
 
@@ -41,6 +42,9 @@ def log_event(event_type, actor, action, target=None, location=None, effects=Non
         "target": target,
         "location": location,
         "effects": effects or [],
+        "importance": score_event_importance(
+            event_type, action, effects=effects, target=target,
+        ),
     }
     if not isinstance(event["effects"], list):
         event["effects"] = []

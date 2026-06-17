@@ -5,7 +5,7 @@ Keyword scoring is always available. When Gemini is configured, hybrid
 semantic+keyword retrieval improves paraphrase recall.
 """
 
-from simulation.memory_embeddings import rank_by_embedding, semantic_memory_enabled, store_vector
+from simulation.memory_embeddings import rank_by_embedding, semantic_memory_enabled
 
 _PLAYER_EVENT_TYPES = frozenset({
     "player_action",
@@ -118,9 +118,6 @@ def get_relevant_memories(memories, query, limit=20, *, player=None, area=None, 
         return []
 
     if player and semantic_memory_enabled():
-        for c in candidates:
-            if c.get("kind") == "event" and c.get("id"):
-                store_vector(player, c["id"], c.get("text", ""), meta={"kind": "event"})
         ranked = rank_by_embedding(query, candidates, player, limit=limit)
     else:
         ranked = sorted(candidates, key=lambda c: c.get("score", 0), reverse=True)[:limit]

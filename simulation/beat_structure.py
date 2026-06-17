@@ -186,6 +186,12 @@ def build_narrative_thread_directive(
         target = g.get("target", "?")
         lines.append(f"- Goal ({prog}/{target}): {text}")
 
+    stakes = player.get("scene_stakes") or {}
+    if stakes.get("dramatic_question"):
+        lines.append(f"- Dramatic question: {stakes['dramatic_question'][:100]}")
+    if stakes.get("lose"):
+        lines.append(f"- At stake: {stakes['lose'][:80]}")
+
     pipe = player.get("starting_pipeline") or {}
     if pipe.get("hook") and not (case and case.get("title")):
         lines.append(

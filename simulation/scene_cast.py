@@ -232,6 +232,19 @@ def select_scene_cast(present, player, action_ctx, max_focus=1):
             "Background crowd is faceless — no speeches."
         ), None
 
+    tid = action_ctx.get("target_id")
+    if tid and tid in present_ids:
+        target_npc = next(n for n in present if n["id"] == tid)
+        others = len(present) - 1
+        crowd = (
+            f"{others} other people are nearby as background only — "
+            "do NOT describe them, name them, or give them gestures or dialogue. "
+            "They are faceless crowd noise."
+            if others > 0 else
+            "No other individuals worth distinguishing this scene."
+        )
+        return [target_npc], crowd, tid
+
     if kind in ("explore", "rest", "travel", "observe", "approach") and not action_ctx.get("target_id"):
         if kind == "find":
             pass  # find always wants a person

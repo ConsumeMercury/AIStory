@@ -2,7 +2,7 @@
 
 import threading
 
-_tick_lock = threading.Lock()
+_tick_lock = threading.RLock()
 
 
 def get_tick_lock():

@@ -56,6 +56,10 @@ def build_world_inspector():
         if n.get("key_npc")
     ][:12]
 
+    from simulation.story_entropy import score_story_entropy
+    from scripts.world_health_report import run_world_health_report
+
+    report = run_world_health_report()
     return {
         "time": {"day": world.get("day"), "hour": world.get("hour"), "weather": world.get("weather")},
         "player": {
@@ -85,4 +89,7 @@ def build_world_inspector():
         "district_plots": district_plots[:12],
         "key_npcs": key_npcs,
         "recent_rumors": (rumors[-5:] if isinstance(rumors, list) else []),
+        "story_entropy": score_story_entropy(player, npcs, areas=areas),
+        "health_score": report.get("score"),
+        "health_warnings": report.get("warnings", [])[:5],
     }

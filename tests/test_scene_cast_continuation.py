@@ -27,3 +27,23 @@ def test_wait_keeps_prior_conversation_partner():
     assert len(focus) == 1
     assert focus[0]["id"] == "n1"
     assert fid == "n1"
+
+
+def test_explicit_target_beats_higher_scored_npc():
+    scholar = _scholar("s1", gender="male")
+    merchant = {
+        "id": "m1",
+        "name": "Known Merchant",
+        "role": "merchant",
+        "gender": "male",
+        "status": "alive",
+        "key_npc": True,
+        "physique": {"build": "stocky", "presentation": 80},
+    }
+    player = {
+        "known_npcs": {"m1": {"name_known": True, "seen_before": True}},
+    }
+    ctx = {"kind": "ask_about", "target_id": "s1", "action_summary": "Ask the scholar about archives"}
+    focus, _note, fid = select_scene_cast([merchant, scholar], player, ctx)
+    assert fid == "s1"
+    assert focus[0]["id"] == "s1"

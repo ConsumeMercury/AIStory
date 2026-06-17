@@ -99,11 +99,29 @@ def _run_tick():
                     "action": fired[0],
                     "excerpt": fired[0][:200],
                 })
-            from simulation.player_legacy import seed_legacy_rumors
-            from simulation.goal_events import maybe_goal_rumor
-            seed_legacy_rumors(player, tick=tick)
-            maybe_goal_rumor(player, tick=tick)
-            _save("player/player.json", player)
+        from simulation.player_legacy import seed_legacy_rumors
+        from simulation.goal_events import maybe_goal_rumor
+        seed_legacy_rumors(player, tick=tick)
+        maybe_goal_rumor(player, tick=tick)
+        from simulation.memory_consolidator import maybe_consolidate_player_memories
+        maybe_consolidate_player_memories(player, tick=tick)
+        _save("player/player.json", player)
+
+        world = _load("world/world_state.json", {})
+        from simulation.information_packets import advance_information_packets, persist_packets
+        advance_information_packets(world, player, tick=tick)
+        persist_packets(world)
+
+        npcs = _load("characters/npcs.json", {})
+        areas = _load("world/areas.json", {})
+        from simulation.npc_emotions import decay_all_npcs
+        from simulation.secret_activity import tick_secret_exposure
+        from simulation.world_pressure import apply_pressure_to_world
+        if decay_all_npcs(npcs):
+            _save("characters/npcs.json", npcs)
+        tick_secret_exposure(npcs, tick=tick, day=world.get("day"))
+        apply_pressure_to_world(world, areas)
+        _save("world/world_state.json", world)
 
         player = _load("player/player.json", {})
         npcs = _load("characters/npcs.json", {})

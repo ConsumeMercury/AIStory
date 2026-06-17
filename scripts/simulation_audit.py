@@ -81,6 +81,9 @@ def _reset_player_baseline():
     if not player:
         raise RuntimeError("No player save — bootstrap or create character first.")
     player = copy.deepcopy(player)
+    areas = load("world/areas.json", {})
+    from scripts.generation_checks import _ensure_player_area
+    _ensure_player_area(player, areas)
     player["journal"] = []
     player["scene_focus"] = None
     player["last_combat_target"] = None
@@ -132,6 +135,20 @@ def _ensure_present_npcs(player, npcs, minimum=1):
         return
     from storage import save
     needed = minimum - len(here)
+    if needed > 0 and not any(n.get("status") == "alive" for n in npcs.values()):
+        npcs["audit_stand_in"] = {
+            "id": "audit_stand_in",
+            "name": "Audit Stand-in",
+            "role": "merchant",
+            "gender": "female",
+            "status": "alive",
+            "area": area,
+            "location": player.get("location"),
+            "stats": {"health": 80, "max_health": 80, "stamina": 20, "max_stamina": 20},
+            "traits": {},
+            "physique": {"build": "wiry", "presentation": 50},
+        }
+        needed -= 1
     for npc in npcs.values():
         if npc.get("status") != "alive":
             continue
@@ -452,6 +469,19 @@ def _inject_audit_scholars(player, npcs):
     save("player/player.json", player)
 
 
+def _cleanup_audit_scholars(npcs):
+    """Remove injected audit NPCs so later checks are not polluted."""
+    from storage import save
+
+    changed = False
+    for key in ("audit_scholar_a", "audit_scholar_b"):
+        if key in npcs:
+            del npcs[key]
+            changed = True
+    if changed:
+        save("characters/npcs.json", npcs)
+
+
 def audit_same_role_scholar_focus():
     """Two scholars present — focal scholar must not swap across beats."""
     from storage import load
@@ -472,6 +502,7 @@ def audit_same_role_scholar_focus():
         all(fid == "audit_scholar_a" for fid in focal_ids),
         f"same-role focus should stay on audit_scholar_a, got {focal_ids}",
     )
+    _cleanup_audit_scholars(npcs)
 
 
 def audit_scheduled_event_fires_on_wait():
@@ -517,6 +548,7 @@ def audit_scheduled_event_fires_on_wait():
         ctx.get("events_fired") or "SCHEDULED EVENT FIRED" in (ctx.get("story_directive") or ""),
         f"event should fire on wait beat: {ctx}",
     )
+    _cleanup_audit_scholars(npcs)
 
 
 def main():

@@ -34,11 +34,19 @@ def spread_rumor_beliefs(tick=None, day=None):
             "scandalous": -0.15, "hushed": -0.1,
         }.get(interp, 0.0)
 
-        # NPCs in same city as rumor text might "hear" it
-        candidates = [
-            nid for nid, n in npcs.items()
-            if n.get("status") == "alive"
-        ]
+        # Prefer NPCs in same city/area as rumor origin
+        rumor_area = rumor.get("area_id")
+        rumor_city = rumor.get("city")
+        candidates = []
+        for nid, n in npcs.items():
+            if n.get("status") != "alive":
+                continue
+            if rumor_area and n.get("area") == rumor_area:
+                candidates.append(nid)
+            elif rumor_city and n.get("location") == rumor_city:
+                candidates.append(nid)
+        if not candidates:
+            candidates = [nid for nid, n in npcs.items() if n.get("status") == "alive"]
         if not candidates:
             continue
         for nid in random.sample(candidates, k=min(3, len(candidates))):
@@ -58,5 +66,8 @@ def spread_rumor_beliefs(tick=None, day=None):
                 "source": "rumor",
                 "about_player": "outsider" in text.lower() or "stranger" in text.lower(),
             })
+            from simulation.belief_model import update_beliefs_from_rumor
+            update_beliefs_from_rumor(npc, rumor, tick=tick, day=day)
 
     save(MEM_FILE, store)
+    save(NPC_FILE, npcs)

@@ -1,12 +1,13 @@
 def check_goal_progress(npc, action, wealth_gain=0):
     completed = []
 
-    for goal in list(npc.get("goals", [])):
+    goals = npc.setdefault("goals", list(npc.get("goals") or []))
+    for goal in list(goals):
 
         if goal == "accumulate wealth" and npc.get("wealth", 0) >= 500:
             completed.append(goal)
-            npc["goals"].remove(goal)
-            npc["goals"].append("maintain wealth")
+            goals.remove(goal)
+            goals.append("maintain wealth")
 
         elif goal == "gain power" and action == "plan":
             npc.setdefault("goals_progress", {})

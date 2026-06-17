@@ -115,12 +115,37 @@ def backup_saves():
 
 def restore_saves(backups):
     from storage import save
-    if backups.get("player"):
+    if "player" in backups and backups["player"]:
         save("player/player.json", backups["player"])
-    if backups.get("world"):
+    if "world" in backups and backups["world"]:
         save("world/world_state.json", backups["world"])
-    if backups.get("npcs"):
+    if "npcs" in backups and backups["npcs"]:
         save("characters/npcs.json", backups["npcs"])
+
+
+def _ensure_player_area(player, areas=None):
+    """Recover area id when saves lost placement fields."""
+    from storage import load
+
+    if player.get("area"):
+        return player["area"]
+    loc = player.get("location")
+    dist = player.get("district")
+    if loc and dist:
+        player["area"] = f"{loc}:{dist}"
+        return player["area"]
+    areas = areas or load("world/areas.json", {})
+    if not areas:
+        return None
+    from game.starting_placement import pick_start_area, pick_start_city
+    locations = load("world/locations.json", {})
+    cities = locations.get("cities", {})
+    city = player.get("location") or pick_start_city(cities)
+    if city:
+        player.setdefault("location", city)
+    bg = player.get("background", "wanderer")
+    player["area"] = pick_start_area(areas, city or next(iter(cities), ""), bg)
+    return player.get("area")
 
 
 def reset_baseline(*, area_only_npcs=True):
@@ -132,9 +157,13 @@ def reset_baseline(*, area_only_npcs=True):
     if not player:
         raise RuntimeError("No player save — create a character first.")
 
-    if _BASELINE_PLAYER is None:
+    areas = load("world/areas.json", {})
+    _ensure_player_area(player, areas)
+
+    if _BASELINE_PLAYER is None or not _BASELINE_PLAYER.get("area"):
         _BASELINE_PLAYER = copy.deepcopy(player)
     player = copy.deepcopy(_BASELINE_PLAYER)
+    _ensure_player_area(player, areas)
 
     player["journal"] = []
     player["scene_focus"] = None

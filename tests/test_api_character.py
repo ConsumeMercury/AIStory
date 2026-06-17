@@ -13,6 +13,13 @@ from game.bootstrap import boot_ready, start_bootstrap
 
 @pytest.fixture
 def booted_client():
+    from simulation import simulation_runner
+
+    simulation_runner.stop()
+    player_path = Path("player/player.json")
+    if player_path.exists():
+        player_path.unlink()
+
     start_bootstrap()
     for _ in range(60):
         if boot_ready():
@@ -20,8 +27,15 @@ def booted_client():
         import time
         time.sleep(0.05)
     assert boot_ready()
+
+    # Background sim ticks can write an empty player shell before the POST.
+    if player_path.exists():
+        player_path.unlink()
+
     with TestClient(create_app()) as client:
         yield client
+
+    simulation_runner.stop()
 
 
 @pytest.fixture(autouse=True)
@@ -39,8 +53,6 @@ def _isolated_player_save():
 
 
 def test_create_character_survives_opening_failure(booted_client):
-    player_path = Path("player/player.json")
-
     with patch.dict(os.environ, {"GEMINI_API_KEY": "fake-key", "AISTORY_AUTO_CHAR": ""}, clear=False):
         os.environ.pop("AISTORY_AUTO_CHAR", None)
         with patch(

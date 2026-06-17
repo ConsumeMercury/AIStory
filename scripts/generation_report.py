@@ -327,7 +327,7 @@ def main():
         mock_narr = MagicMock()
         mock_narr.generate_scene.return_value = (
             "You stand at the docks. Rain on the pilings. She watches you, "
-            "a scholar in grey wool. (offline mock scene)"
+            "in grey wool. (offline mock scene)"
         )
         mock = patch("simulation.story_loop.get_narrator", return_value=mock_narr)
         mock.start()

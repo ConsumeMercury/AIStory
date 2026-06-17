@@ -72,7 +72,7 @@ def _memory_bias(npc_id):
 
 
 def choose_action(npc, trait_weights=None, weather="Clear", memory_bias=None,
-                  areas=None, institutions=None, npc_id=None):
+                  areas=None, institutions=None, npc_id=None, npcs=None):
     t = npc.get("traits", {})
     tw = trait_weights or {}
     bp = npc.get("behavior_profile", {})
@@ -144,10 +144,44 @@ def choose_action(npc, trait_weights=None, weather="Clear", memory_bias=None,
     if npc_id:
         rumor_action_bias(npc_id, weights)
 
-    if institutions and npc.get("institution"):
+    from simulation.npc_planning import apply_plan_weights, advance_subgoal
+    from simulation.npc_emotions import emotion_action_bias
+    from simulation.social_circles import social_circle_action_bias
+
+    apply_plan_weights(npc, weights)
+    emotion_action_bias(npc, weights)
+    if npc_id:
+        if npcs is None:
+            npcs = load(NPC_FILE, {})
+        social_circle_action_bias(npc_id, npcs, weights)
+
+    if institutions and isinstance(npc.get("institution"), dict):
         inst = institutions.get(npc["institution"].get("id"), {})
         for act, mult in politics_action_bias(npc, inst).items():
             weights[act] = weights.get(act, 5) * mult
+
+    obj = npc.get("personal_objective")
+    obj_text = obj.get("text", "") if isinstance(obj, dict) else (obj or "")
+    if obj_text:
+        lower_obj = obj_text.lower()
+        if any(w in lower_obj for w in ("steal", "rob", "heirloom", "fence")):
+            weights["plan"] = weights.get("plan", 5) + 14
+            weights["hide"] = weights.get("hide", 5) + 6
+        if any(w in lower_obj for w in ("prove", "expose", "catch", "avenge", "ruin")):
+            weights["plan"] = weights.get("plan", 5) + 12
+            weights["study"] = weights.get("study", 5) + 8
+        if any(w in lower_obj for w in ("wealth", "guild", "marry", "sell", "coin")):
+            weights["trade"] = weights.get("trade", 5) + 12
+        if any(w in lower_obj for w in ("save", "protect", "witness", "penitent")):
+            weights["help"] = weights.get("help", 5) + 10
+
+    for fear in (npc.get("fears") or [])[:2]:
+        fl = fear.lower()
+        if "violence" in fl or "betrayal" in fl:
+            weights["hide"] = weights.get("hide", 5) * 1.25
+            weights["fight"] = weights.get("fight", 5) * 0.85
+        if "watch" in fl or "public" in fl:
+            weights["socialise"] = weights.get("socialise", 5) * 0.8
 
     total = sum(weights.values())
     if total <= 0:
@@ -187,7 +221,9 @@ def simulate_npcs(tick=None):
         save(NPC_FILE, npcs)
         return
 
-    active = random.sample(npc_ids, k=min(max_npcs, len(npc_ids)))
+    from simulation.story_manager import npc_simulation_weights, weighted_npc_sample
+    weights = npc_simulation_weights(player, npcs, areas=areas, institutions=institutions)
+    active = weighted_npc_sample(npc_ids, weights, min(max_npcs, len(npc_ids)))
 
     for npc_id in active:
         npc = npcs[npc_id]
@@ -203,8 +239,12 @@ def simulate_npcs(tick=None):
         location = npc.get("location", "unknown")
         action = choose_action(
             npc, trait_weights, weather, _memory_bias(npc_id),
-            areas=areas, institutions=institutions, npc_id=npc_id,
+            areas=areas, institutions=institutions, npc_id=npc_id, npcs=npcs,
         )
+        from simulation.npc_planning import advance_subgoal
+        from simulation.personality_drift import drift_from_survival
+        advance_subgoal(npc, action)
+        drift_from_survival(npc)
         if player_area and npc.get("area") == player_area:
             rumor_relationship_nudge(npc_id, player_present=True)
         effects = []
@@ -250,7 +290,7 @@ def simulate_npcs(tick=None):
             peers = [i for i in npc_ids if i != npc_id and npcs[i].get("location") == location]
             if peers:
                 other = random.choice(peers)
-                kind = "charm" if npc["traits"].get("humor", 0) > 60 else "kindness"
+                kind = "charm" if npc.get("traits", {}).get("humor", 0) > 60 else "kindness"
                 apply_interaction(other, kind, intensity=0.7, actor_id=npc_id)
                 effects.append("socialised")
                 npc["_interacted_with"] = other

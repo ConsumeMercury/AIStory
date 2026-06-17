@@ -106,6 +106,31 @@ def store_vector(player, key, text, *, meta=None):
     return vec
 
 
+def ensure_memory_vector(player, key, text, *, meta=None):
+    """Embed at ingestion time if missing; returns vector or None."""
+    existing = get_vector(player, key)
+    if existing:
+        return existing
+    return store_vector(player, key, text, meta=meta)
+
+
+def ingest_event_vector(player, event):
+    """Cache embedding when an event is logged (write path)."""
+    if not event or not player:
+        return None
+    from simulation.memory_retrieval import _event_text
+
+    eid = event.get("id")
+    if not eid:
+        return None
+    text = _event_text(event)
+    if not text:
+        return None
+    return ensure_memory_vector(
+        player, eid, text, meta={"kind": "event", "importance": event.get("importance")},
+    )
+
+
 def get_vector(player, key):
     rec = _vector_store(player).get(key)
     return rec.get("vector") if rec else None
@@ -130,7 +155,7 @@ def rank_by_embedding(query, candidates, player, *, limit=5):
         if vec is None and cid:
             vec = (store.get(cid) or {}).get("vector")
         if vec is None and cid and c.get("text"):
-            vec = store_vector(player, cid, c["text"], meta={"kind": c.get("kind")})
+            vec = get_vector(player, cid)
         sim = cosine_similarity(qvec, vec) if vec else 0.0
         c["semantic_score"] = sim
         c["score"] = c.get("score", 0) + sim * 100

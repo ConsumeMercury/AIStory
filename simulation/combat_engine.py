@@ -29,7 +29,7 @@ def _combat_stats(entity):
     if entity.get("journal") is not None:
         from simulation.item_engine import apply_equipment_to_entity
         return apply_equipment_to_entity(entity)
-    return entity.get("stats") or {}
+    return entity.setdefault("stats", entity.get("stats") or {})
 
 
 def _strike(attacker, defender):
@@ -39,9 +39,11 @@ def _strike(attacker, defender):
     dfn = d_stats.get("defense", 0)
     roll = random.randint(-3, 6)
     dmg = max(1, atk + roll - dfn)
-    defender["stats"]["health"] = max(0, defender["stats"]["health"] - dmg)
-    attacker["stats"]["stamina"] = max(0, attacker.get("stats", {}).get("stamina", 0) - 3)
-    defender["stats"]["stamina"] = max(0, defender.get("stats", {}).get("stamina", 0) - 2)
+    d_health = defender.setdefault("stats", {})
+    a_stamina = attacker.setdefault("stats", {})
+    d_health["health"] = max(0, d_health.get("health", 0) - dmg)
+    a_stamina["stamina"] = max(0, a_stamina.get("stamina", 0) - 3)
+    d_health["stamina"] = max(0, d_health.get("stamina", 0) - 2)
     return dmg
 
 
@@ -52,12 +54,13 @@ def _apply_injury(entity, severe=False):
         inj = random.choice(_INJURIES)
         if inj not in injuries:
             injuries.append(inj)
-    entity["stats"]["stress"] = min(
-        entity["stats"].get("max_stress", 100),
-        entity["stats"].get("stress", 0) + random.randint(5, 15),
+    stats = entity.setdefault("stats", {})
+    stats["stress"] = min(
+        stats.get("max_stress", 100),
+        stats.get("stress", 0) + random.randint(5, 15),
     )
     if severe:
-        entity["stats"]["speed"] = max(1, entity["stats"].get("speed", 5) - random.randint(1, 3))
+        stats["speed"] = max(1, stats.get("speed", 5) - random.randint(1, 3))
 
 
 def _temperament_setup(a, b):
@@ -67,24 +70,26 @@ def _temperament_setup(a, b):
         if entity.get("journal") is not None:
             continue
         temp = entity.get("temperament")
-        if temp == "ambush" and entity["stats"].get("speed", 0) >= other["stats"].get("speed", 0):
+        estats = entity.setdefault("stats", {})
+        ostats = other.setdefault("stats", {})
+        if temp == "ambush" and estats.get("speed", 0) >= ostats.get("speed", 0):
             entity["_ambush"] = True
             notes.append("ambush")
         elif temp == "territorial":
-            entity["stats"]["defense"] = entity["stats"].get("defense", 0) + 2
+            estats["defense"] = estats.get("defense", 0) + 2
             notes.append("territorial")
         elif temp == "pack":
-            entity["stats"]["speed"] = entity["stats"].get("speed", 0) + 1
+            estats["speed"] = estats.get("speed", 0) + 1
         elif temp == "haunting" and other.get("journal") is not None:
-            other["stats"]["stress"] = min(
-                other["stats"].get("max_stress", 100),
-                other["stats"].get("stress", 0) + 6,
+            ostats["stress"] = min(
+                ostats.get("max_stress", 100),
+                ostats.get("stress", 0) + 6,
             )
             notes.append("haunting")
         elif temp == "relentless":
-            entity["stats"]["stamina"] = min(
-                entity["stats"].get("max_stamina", 30),
-                entity["stats"].get("stamina", 0) + 6,
+            estats["stamina"] = min(
+                estats.get("max_stamina", 30),
+                estats.get("stamina", 0) + 6,
             )
     return notes
 
@@ -92,6 +97,8 @@ def _temperament_setup(a, b):
 def resolve_combat(a, b, max_rounds=12):
     log = []
     _temperament_setup(a, b)
+    a.setdefault("stats", {})
+    b.setdefault("stats", {})
     first, second = (a, b) if a["stats"].get("speed", 0) >= b["stats"].get("speed", 0) else (b, a)
 
     rounds = 0
@@ -101,7 +108,7 @@ def resolve_combat(a, b, max_rounds=12):
         for attacker, defender in ((first, second), (second, first)):
             if not (_alive(attacker) and _alive(defender)):
                 continue
-            stam = attacker["stats"].get("stamina", 1)
+            stam = attacker.setdefault("stats", {}).get("stamina", 1)
             if stam <= 0:
                 if random.random() < 0.5:
                     log.append((attacker.get("id"), "falters", 0))
@@ -131,7 +138,7 @@ def resolve_combat(a, b, max_rounds=12):
     for who, falters, tag in ((a, falter_a, "a"), (b, falter_b, "b")):
         if not _alive(who):
             continue
-        if who["stats"].get("stamina", 0) <= 0:
+        if who.setdefault("stats", {}).get("stamina", 0) <= 0:
             consequences.append(f"{tag}: exhausted — vulnerable")
             _apply_injury(who, severe=random.random() < 0.3)
         if falters >= 2:
@@ -151,7 +158,8 @@ def resolve_combat(a, b, max_rounds=12):
 
     if winner is not None:
         winner["xp"] = winner.get("xp", 0) + 20
-        if loser["stats"]["health"] <= 0:
+        loser_stats = loser.setdefault("stats", {})
+        if loser_stats.get("health", 0) <= 0:
             loser["status"] = "dead"
             consequences.append("fatal blow landed")
         else:
@@ -165,9 +173,11 @@ def resolve_combat(a, b, max_rounds=12):
         "log": log,
         "winner": winner.get("id") if winner else None,
         "loser": loser.get("id") if loser else None,
-        "a_health": a["stats"]["health"],
-        "b_health": b["stats"]["health"],
-        "fatal": bool(winner and loser and loser["stats"]["health"] <= 0),
+        "a_health": a.setdefault("stats", {}).get("health", 0),
+        "b_health": b.setdefault("stats", {}).get("health", 0),
+        "fatal": bool(
+            winner and loser and loser.setdefault("stats", {}).get("health", 0) <= 0
+        ),
         "consequences": consequences,
         "player_injuries": (player_entity.get("injuries") or []) if player_entity else [],
     }

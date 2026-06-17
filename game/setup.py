@@ -125,7 +125,10 @@ def has_player():
 
 
 def world_data_ready():
-    return all(os.path.exists(_path(*rel.split("/"))) for rel in WORLD_DATA_FILES)
+    if not all(os.path.exists(_path(*rel.split("/"))) for rel in WORLD_DATA_FILES):
+        return False
+    npcs = load("characters/npcs.json", {})
+    return bool(npcs) and any(n.get("status") == "alive" for n in npcs.values())
 
 
 def _clear_world_state():
@@ -310,20 +313,23 @@ def build_player(name, age, background_key, appearance, motivation, attire=None)
 
 def save_new_player(player):
     """Place player in world and persist."""
-    areas = load("world/areas.json", {})
-    npcs = load("characters/npcs.json", {})
-    tune_for_player(npcs, player, start_city=player.get("location"))
-    start_city = player.get("location")
-    start_area = ensure_start_area(areas, start_city, player.get("background", "wanderer"))
-    player["area"] = start_area
-    seed_starting_pipeline(player, start_area, areas, npcs)
-    sl = areas.get(start_area, {}).get("storyline") or {}
-    for nid in sl.get("key_npc_ids") or []:
-        npc = npcs.get(nid)
-        if npc and npc.get("area") != start_area:
-            npc["area"] = start_area
-    save("characters/npcs.json", npcs)
-    save(PLAYER_FILE, player)
+    from game.state_context import state_lock
+
+    with state_lock():
+        areas = load("world/areas.json", {})
+        npcs = load("characters/npcs.json", {})
+        tune_for_player(npcs, player, start_city=player.get("location"))
+        start_city = player.get("location")
+        start_area = ensure_start_area(areas, start_city, player.get("background", "wanderer"))
+        player["area"] = start_area
+        seed_starting_pipeline(player, start_area, areas, npcs)
+        sl = areas.get(start_area, {}).get("storyline") or {}
+        for nid in sl.get("key_npc_ids") or []:
+            npc = npcs.get(nid)
+            if npc and npc.get("area") != start_area:
+                npc["area"] = start_area
+        save("characters/npcs.json", npcs)
+        save(PLAYER_FILE, player)
     return player
 
 

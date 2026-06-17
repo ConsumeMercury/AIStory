@@ -162,6 +162,9 @@ def maybe_compact_journal(player, npcs=None):
         store_vector(player, key, text, meta={"kind": "journal_summary", "ticks": [tick_from, tick_to]})
         record["vector_key"] = key
 
+    from simulation.narrative_memory import consolidate_journal_chunk
+    consolidate_journal_chunk(player, chunk, npcs=npcs)
+
     player["journal"] = journal[SUMMARIZE_CHUNK:]
     return True
 

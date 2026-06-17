@@ -79,8 +79,18 @@ def advance_storylines(tick=None):
                     "text": f"In {area.get('name', 'the district')}: {sl['current']}.",
                     "interpretation": random.choice(["worrying", "hushed", "suspicious"]),
                     "spread": random.randint(10, 50),
+                    "area_id": aid,
+                    "city": area.get("city"),
                 })
                 changed = True
+                try:
+                    from storage import load as _load, save as _save
+                    from simulation.story_manager import sync_starting_pipeline_from_area
+                    player = _load("player/player.json", {})
+                    if sync_starting_pipeline_from_area(player, aid, areas):
+                        _save("player/player.json", player)
+                except Exception:
+                    pass
 
     if changed:
         save("rumors/rumors.json", rumors[-200:])

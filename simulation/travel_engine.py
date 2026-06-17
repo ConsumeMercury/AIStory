@@ -62,29 +62,32 @@ def travel(destination_id, run_tick):
     run_tick: callback (the simulation runner's _run_tick) used to advance
     the world while travelling. Returns (ok, message, hours, area).
     """
-    player = load(PLAYER_FILE, {})
-    current = player.get("area")
-    areas = load(AREAS_FILE, {})
+    from game.state_context import state_lock
 
-    here = areas.get(current, {})
-    edges = here.get("edges", {})
-    if destination_id not in edges:
-        return False, f"You can't reach '{destination_id}' from here.", 0, current
+    with state_lock():
+        player = load(PLAYER_FILE, {})
+        current = player.get("area")
+        areas = load(AREAS_FILE, {})
 
-    hours = edges[destination_id]
+        here = areas.get(current, {})
+        edges = here.get("edges", {})
+        if destination_id not in edges:
+            return False, f"You can't reach '{destination_id}' from here.", 0, current
 
-    # advance world time and run background ticks proportional to the trip
-    ticks = min(MAX_BACKGROUND_TICKS, max(1, hours // 2))
-    for _ in range(ticks):
-        run_tick()
-    advance_clock(hours)
+        hours = edges[destination_id]
 
-    dest = areas.get(destination_id, {})
-    player = load(PLAYER_FILE, {})
-    player["area"] = destination_id
-    if dest.get("city"):
-        player["location"] = dest["city"]
-    save(PLAYER_FILE, player)
+        # advance world time and run background ticks proportional to the trip
+        ticks = min(MAX_BACKGROUND_TICKS, max(1, hours // 2))
+        for _ in range(ticks):
+            run_tick()
+        advance_clock(hours)
 
-    name = dest.get("name", destination_id)
-    return True, f"After {hours} hours on the move, you reach {name}.", hours, destination_id
+        dest = areas.get(destination_id, {})
+        player = load(PLAYER_FILE, {})
+        player["area"] = destination_id
+        if dest.get("city"):
+            player["location"] = dest["city"]
+        save(PLAYER_FILE, player)
+
+        name = dest.get("name", destination_id)
+        return True, f"After {hours} hours on the move, you reach {name}.", hours, destination_id

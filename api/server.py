@@ -177,18 +177,22 @@ def create_app():
     @app.post("/api/saves/{slot_id}/load")
     def load_save_slot(slot_id: str):
         from game.save_slots import load_slot
+        from game.state_context import state_lock
         from simulation.world_patch import ensure_world_extensions
         try:
-            load_slot(slot_id)
+            with state_lock():
+                load_slot(slot_id)
+                ensure_world_extensions()
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        ensure_world_extensions()
         return {"ok": True, "state": get_full_state()}
 
     @app.delete("/api/saves/{slot_id}")
     def remove_save_slot(slot_id: str):
         from game.save_slots import delete_slot
-        delete_slot(slot_id)
+        from game.state_context import state_lock
+        with state_lock():
+            delete_slot(slot_id)
         return {"ok": True}
 
     @app.post("/api/undo")
@@ -227,17 +231,20 @@ def create_app():
     @app.post("/api/character")
     def create_character(body: CharacterBody):
         _require_boot_ready()
-        if has_player():
-            raise HTTPException(status_code=409, detail="A character already exists.")
-        try:
-            create_player_from_form(body.model_dump())
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        from game.state_context import state_lock
 
-        from simulation.world_patch import ensure_world_extensions
-        ensure_world_extensions()
+        with state_lock():
+            if has_player():
+                raise HTTPException(status_code=409, detail="A character already exists.")
+            try:
+                create_player_from_form(body.model_dump())
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            except RuntimeError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+            from simulation.world_patch import ensure_world_extensions
+            ensure_world_extensions()
 
         if not api_key():
             return {

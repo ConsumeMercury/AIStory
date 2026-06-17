@@ -33,6 +33,25 @@ from simulation.local_places import build_known_places_block, build_place_lock
 from simulation.generation_guardrails import guardrails_prompt_block, build_hard_constraints_block
 from simulation.gemini_client import generate_text, generate_text_stream
 from simulation.memory_context import build_memory_context
+from simulation.story_manager import build_story_manager_block
+from simulation.player_reputation import reputation_narrator_block
+from simulation.prompt_profiler import profile_prompt_sections
+from simulation.directive_validator import validate_directives
+from simulation.story_graph import story_graph_narrator_block
+from simulation.scene_objectives import build_scene_objectives_block
+from simulation.narrative_causality import causality_narrator_block
+from simulation.narrative_promises import unresolved_promises_block
+from simulation.story_entropy import entropy_narrator_block
+from simulation.belief_model import focal_belief_block
+from simulation.beat_structure import classify_beat_structure
+from simulation.npc_emotions import focal_emotion_block
+from simulation.social_circles import focal_circle_block
+from simulation.institution_memory import institution_memory_block
+from simulation.secret_activity import secret_narrator_pressure
+from simulation.reputation_layers import reputation_layers_block
+from simulation.cultural_identity import cultural_reaction_block
+from simulation.economy_pressure import economy_narrator_block
+from simulation.world_pressure import world_pressure_block
 from storage import load
 
 DEBUG_TOKENS = os.environ.get("AISTORY_DEBUG_TOKENS", "").lower() in ("1", "true", "yes")
@@ -66,7 +85,7 @@ def _npc_line(npc, known, is_new, rel, tick, name_reveal=None, institutions=None
     g_noun = gender_noun(npc)
     g_label = npc_gender_label(npc)
     revealing = name_reveal and name_reveal.get("npc_id") == nid
-    label = npc["name"] if (known and not revealing) else short_descriptor(npc)
+    label = (npc.get("name") or short_descriptor(npc)) if (known and not revealing) else short_descriptor(npc)
     role = npc.get("role", "stranger")
     age = npc.get("age", "?")
     persona = npc.get("persona", {})
@@ -305,6 +324,40 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
         kind=kind,
         action_context=action_context,
     )
+    story_manager_block = build_story_manager_block(
+        player, npcs_all,
+        focal_npc_id=focal_npc_id,
+        kind=kind,
+        areas=areas,
+    )
+    reputation_block = reputation_narrator_block(player)
+    focal_npc = npcs_all.get(focal_npc_id) if focal_npc_id else None
+    institutions = load("world/institutions.json", {})
+    layers_block = reputation_layers_block(
+        player, target_npc=focal_npc, institutions=institutions,
+    )
+    if layers_block:
+        reputation_block = (
+            (reputation_block + "\n" + layers_block).strip() if reputation_block else layers_block
+        )
+    emotion_block = focal_emotion_block(focal_npc_id, npcs_all) if focal_npc_id else ""
+    circle_block = focal_circle_block(focal_npc_id, npcs_all) if focal_npc_id else ""
+    inst_mem_block = institution_memory_block(player, institutions, target_npc=focal_npc)
+    secret_block = secret_narrator_pressure(focal_npc) if focal_npc else ""
+    culture_block = cultural_reaction_block(player, areas=areas)
+    economy_block = economy_narrator_block(player, areas)
+    pressure_block = world_pressure_block(player, areas=areas, world=world)
+    structure_mode = classify_beat_structure(
+        kind, action_context, player, journal, aid, focal_npc_id,
+    )
+    objectives_block = build_scene_objectives_block(
+        player, kind, action_context, structure_mode=structure_mode,
+    )
+    graph_block = story_graph_narrator_block(player, npcs_all, areas=areas)
+    causality_block = causality_narrator_block(player)
+    promises_block = unresolved_promises_block(player)
+    entropy_block = entropy_narrator_block(player, npcs_all, areas=areas)
+    belief_block = focal_belief_block(focal_npc_id, npcs_all) if focal_npc_id else ""
     structure_block = build_beat_structure_block(
         kind, action_context, player, journal, aid, focal_npc_id,
     )
@@ -360,15 +413,65 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
     known_places_block = build_known_places_block(player, aid)
     place_lock_block = build_place_lock(player, area, action_context)
 
+    section_map = {
+        "craft_core": CRAFT_CORE,
+        "narrative_thread": thread_block,
+        "story_manager": story_manager_block,
+        "scene_objectives": objectives_block,
+        "story_graph": graph_block,
+        "causality": causality_block,
+        "promises": promises_block,
+        "entropy": entropy_block,
+        "focal_beliefs": belief_block,
+        "focal_emotion": emotion_block,
+        "social_circle": circle_block,
+        "institution_memory": inst_mem_block,
+        "secret_pressure": secret_block,
+        "culture": culture_block,
+        "economy": economy_block,
+        "world_pressure": pressure_block,
+        "prose_structure": structure_block,
+        "craft_kind": craft_kind,
+        "length": length_block,
+        "scene_mode": mode_block,
+        "continuity": continuity_block,
+        "narrative_continuity": narrative_block,
+        "memory": memory_block,
+        "conversation_ledger": ledger_block,
+        "known_places": known_places_block,
+        "place_lock": place_lock_block,
+        "scene_facts": scene_facts,
+        "setting": f"SCENE:\nSetting: {setting}. Place: {place}.",
+        "local_arc": arc,
+        "scene_event": event_block,
+        "name_rule": name_rule,
+        "protagonist": f"PROTAGONIST: {player_block}",
+        "this_beat": f"THIS BEAT: {action_block}",
+        "extra_directive": f"Note: {extra_directive}" if extra_directive else "",
+        "npc_context": npc_block,
+        "avoid_repeat": avoid_block,
+        "reputation": reputation_block,
+        "guardrails": guardrails_prompt_block(),
+        "immersion": immersion,
+        "hard_constraints": hard_block,
+    }
     prompt = _join_prompt_sections(
         CRAFT_CORE,
         thread_block,
+        story_manager_block,
+        objectives_block,
+        graph_block,
         structure_block,
         craft_kind,
         length_block,
         mode_block,
         continuity_block,
         narrative_block,
+        causality_block,
+        promises_block,
+        culture_block,
+        economy_block,
+        pressure_block,
         memory_block,
         ledger_block,
         known_places_block,
@@ -382,13 +485,23 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
         f"THIS BEAT: {action_block}",
         f"Note: {extra_directive}" if extra_directive else "",
         npc_block,
+        belief_block,
+        emotion_block,
+        circle_block,
+        inst_mem_block,
+        secret_block,
         avoid_block,
+        reputation_block,
+        entropy_block,
         guardrails_prompt_block(),
         immersion,
         hard_block,
         "Write the scene now. Literary novel prose only — obey HARD CONSTRAINTS, "
         "NARRATIVE THREAD, PROSE STRUCTURE, SCENE MODE, and DO NOT REPEAT.",
     )
+    if DEBUG_TOKENS:
+        profile_prompt_sections(section_map, label="assemble_scene_prompt")
+    validate_directives(prompt)
     return prompt, token_budget, focal_npc_id, memory_debug
 
 

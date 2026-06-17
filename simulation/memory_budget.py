@@ -11,9 +11,11 @@ CHARS_PER_TOKEN = 4
 # (slot_name, max_tokens, trim_priority) — lower priority number = evict first
 MEMORY_SLOTS = (
     ("retrieved_events", 300, 1),
-    ("distant_history", 400, 2),
-    ("recent_journal", 800, 3),
-    ("plot_summary", 400, 4),
+    ("focal_npc_memory", 200, 2),
+    ("distant_history", 400, 3),
+    ("recent_journal", 800, 4),
+    ("narrative_memory", 250, 5),
+    ("plot_summary", 400, 6),
 )
 
 TOTAL_MEMORY_BUDGET = sum(s[1] for s in MEMORY_SLOTS)

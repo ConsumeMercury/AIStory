@@ -65,6 +65,25 @@ from simulation.consequence_queue import register_from_action, pop_delayed_direc
 from simulation.npc_drama import format_drama_block
 from simulation.rival_engine import bump_notoriety, maybe_spawn_rival, rival_directive
 from simulation.player_legacy import legacy_from_action, legacy_narrator_block
+from simulation.story_manager import sync_all_pipelines, record_turn_story_progress
+from simulation.narrative_memory import record_beat_narrative_memory
+from simulation.player_reputation import build_reputation_profile
+from simulation.memory_embeddings import ingest_event_vector
+from simulation.narrative_causality import record_from_beat
+from simulation.narrative_promises import (
+    detect_promises_in_scene,
+    try_resolve_from_action,
+)
+from simulation.information_packets import emit_from_player_beat, persist_packets
+from simulation.memory_consolidator import maybe_consolidate_player_memories
+from simulation.story_entropy import nudge_stale_district_tension
+from simulation.belief_model import update_beliefs_from_event
+from simulation.npc_emotions import emotions_from_beat
+from simulation.personality_drift import drift_from_beat
+from simulation.institution_memory import record_from_player_action
+from simulation.claimed_memory import record_beat_memory, interrogation_directive
+from simulation.reputation_layers import build_reputation_layers
+from simulation.economy_pressure import ripple_from_district_shock
 from simulation.investigation_cases import ensure_case, advance_case, case_narrator_block, sanitize_active_case
 from simulation.storyline_behavior import narrator_storyline_block
 from game.starting_placement import starting_pipeline_narrator_block
@@ -356,7 +375,7 @@ def _do_combat(player, npcs, monsters, present, tick, action, action_ctx):
     )
 
     if repeat_finisher:
-        target["stats"]["health"] = 0
+        target.setdefault("stats", {})["health"] = 0
         target["status"] = "dead"
         stats = player.setdefault("stats", {})
         stats["stamina"] = max(0, stats.get("stamina", 0) - 6)
@@ -496,13 +515,20 @@ def process_player_action(action, *, on_prose_chunk=None):
 
     with state_lock():
         push_undo_snapshot()
-        log_event("player_action", "player", action, tick=tick)
         world = load(WORLD_FILE, {})
         npcs = load(NPC_FILE, {})
         monsters = load(MON_FILE, {})
         player = load(PLAYER_FILE, {})
         events = all_events()
         rumors = load(RUMOR_FILE, [])
+        areas = load(AREAS_FILE, {})
+        sync_all_pipelines(player, areas)
+        nudge_stale_district_tension(player, areas)
+        action_evt = log_event("player_action", "player", action, tick=tick)
+        ingest_event_vector(player, action_evt)
+        save(PLAYER_FILE, player)
+        if areas:
+            save(AREAS_FILE, areas)
 
     area_before = player.get("area")
     bootstrap_ctx = {}
@@ -550,7 +576,7 @@ def process_player_action(action, *, on_prose_chunk=None):
     action_ctx = interpret_action(
         replay_action, player, present, world, npcs=npcs, scene_state=scene_state,
     )
-    kind = action_ctx["kind"]
+    kind = action_ctx.get("kind", "general")
     from simulation.local_places import looks_like_local_movement
     if looks_like_local_movement(action) and kind in ("general", "explore", "observe"):
         action_ctx["kind"] = "approach"
@@ -1105,7 +1131,12 @@ def process_player_action(action, *, on_prose_chunk=None):
         player, npcs, world, action_ctx, tick, persist=True,
     )
     focus_npcs, crowd_note, focal_id = select_scene_cast(present, player, action_ctx)
+    areas_story = load(AREAS_FILE, {})
     with state_lock():
+        player = load(PLAYER_FILE, {})
+        record_turn_story_progress(player, kind=kind, action_ctx=action_ctx, areas=areas_story)
+        if tick % 5 == 0 or not player.get("reputation_profile"):
+            build_reputation_profile(player)
         save(PLAYER_FILE, player)
     combat_snap = action_ctx.get("combat_snapshot")
     if kind == "attack" and combat_snap:
@@ -1138,11 +1169,47 @@ def process_player_action(action, *, on_prose_chunk=None):
             intensity=1.2 if kind in ("threaten", "help", "insult") else 1.0,
         )
 
-    log_event(
+    interaction_evt = log_event(
         "player_interaction", "player", action_ctx.get("memory_tag", "general"),
         target=action_ctx.get("target_id"), location=player.get("location"),
         effects=[kind], tick=tick,
     )
+    with state_lock():
+        player = load(PLAYER_FILE, {})
+        world = load(WORLD_FILE, {})
+        ingest_event_vector(player, interaction_evt)
+        record_beat_narrative_memory(
+            player, kind=kind, action=action, action_ctx=action_ctx, tick=tick,
+        )
+        record_from_beat(player, kind, action_ctx, world, tick=tick)
+        try_resolve_from_action(player, action, kind, tick=tick)
+        emit_from_player_beat(world, player, kind, action_ctx, tick=tick)
+        persist_packets(world)
+        tid = action_ctx.get("target_id") or focal_id
+        npcs_live = load(NPC_FILE, {})
+        institutions = load("world/institutions.json", {})
+        target_live = npcs_live.get(tid) if tid else None
+        check = action_ctx.get("skill_check") or {}
+        success = check.get("success", True)
+        if tid and target_live:
+            emotions_from_beat(target_live, kind, success=success)
+            drift_from_beat(target_live, kind, success=success)
+            record_beat_memory(target_live, kind, action, tick=tick)
+            update_beliefs_from_event(target_live, interaction_evt, tick=tick)
+            save(NPC_FILE, npcs_live)
+        if target_live:
+            record_from_player_action(
+                institutions, player, kind, action_ctx, target_live, tick=tick,
+            )
+            save("world/institutions.json", institutions)
+        build_reputation_layers(
+            player, area_id=player.get("area"), target_npc=target_live, institutions=institutions,
+        )
+        if kind == "attack" and success and player.get("area"):
+            areas_live = load(AREAS_FILE, {})
+            ripple_from_district_shock(player.get("area"), areas_live, crime_delta=3, prosperity_delta=-2)
+            save(AREAS_FILE, areas_live)
+        save(PLAYER_FILE, player)
 
     known_ids = {nid for nid, rec in player.get("known_npcs", {}).items() if rec.get("name_known")}
     focus_id_list = [n["id"] for n in focus_npcs]
@@ -1201,6 +1268,12 @@ def process_player_action(action, *, on_prose_chunk=None):
     if misname:
         action_ctx["story_directive"] = (
             action_ctx.get("story_directive", "") + " " + misname
+        ).strip()
+    focal_for_directive = npcs.get(focal_id or action_ctx.get("target_id") or "")
+    interrogate = interrogation_directive(focal_for_directive, kind) if focal_for_directive else ""
+    if interrogate:
+        action_ctx["story_directive"] = (
+            action_ctx.get("story_directive", "") + " " + interrogate
         ).strip()
 
     hard_constraints = build_hard_constraints_block(
@@ -1367,7 +1440,13 @@ def process_player_action(action, *, on_prose_chunk=None):
             scene_cast_ids=[n["id"] for n in present],
         )
         maybe_compact_journal(player, npcs)
-        player["journal"] = player["journal"][-300:]
+        if scene:
+            detect_promises_in_scene(
+                player, scene, tick=tick, kind=kind, action_ctx=action_ctx,
+            )
+        maybe_consolidate_player_memories(player, tick=tick)
+        journal = player.get("journal") or []
+        player["journal"] = journal[-300:]
         save(PLAYER_FILE, player)
 
     if scene:
