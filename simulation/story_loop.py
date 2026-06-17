@@ -43,6 +43,11 @@ from simulation.player_identity import (
 )
 from simulation.appearance_impression import record_first_impression
 from simulation.scene_cast import select_scene_cast, pick_name_target
+from simulation.scene_population import (
+    resolve_scene_present,
+    persist_scene_cast,
+    build_clarification_identity_directive,
+)
 from simulation.scene_events import maybe_scene_event
 from simulation.immersion_context import (
     format_rumor_whispers, build_player_inner_voice,
@@ -459,7 +464,11 @@ def process_player_action(action, *, on_prose_chunk=None):
         rumors = load(RUMOR_FILE, [])
 
     area_before = player.get("area")
-    present = _present_npcs(npcs, player)
+    area_present = _present_npcs(npcs, player)
+    bootstrap_ctx = {}
+    if player.get("scene_focus"):
+        bootstrap_ctx["target_id"] = player.get("scene_focus")
+    present = resolve_scene_present(area_present, player, bootstrap_ctx, npcs)
     sync_scene_focus(player, present, npcs)
 
     forced_kind = None
@@ -475,13 +484,16 @@ def process_player_action(action, *, on_prose_chunk=None):
             replay_action = original
         player["scene_focus"] = clarified_id
         clear_pending_clarification(player)
+        bootstrap_ctx["target_id"] = clarified_id
+        bootstrap_ctx["clarification_resolved"] = True
+        present = resolve_scene_present(area_present, player, bootstrap_ctx, npcs)
         with state_lock():
             save(PLAYER_FILE, player)
 
     if player.get("active_case") and not player["active_case"].get("solved"):
         areas_for_case = load(AREAS_FILE, {})
         _, case_changed = sanitize_active_case(
-            player, npcs, areas_for_case, present_ids=[n["id"] for n in present],
+            player, npcs, areas_for_case, present_ids=[n["id"] for n in area_present],
         )
         if case_changed:
             with state_lock():
@@ -500,10 +512,11 @@ def process_player_action(action, *, on_prose_chunk=None):
     if forced_target_id:
         action_ctx["target_id"] = forced_target_id
         action_ctx["clarification_resolved"] = True
+        id_directive = build_clarification_identity_directive(npcs.get(forced_target_id))
         action_ctx["story_directive"] = (
             action_ctx.get("story_directive", "")
-            + " CLARIFICATION RESOLVED — answer the protagonist's question now; "
-            "do NOT repeat your prior speech verbatim."
+            + " "
+            + id_directive
         ).strip()
 
     with state_lock():
@@ -549,14 +562,15 @@ def process_player_action(action, *, on_prose_chunk=None):
     resolve_target_and_absence(action, player, present, npcs, action_ctx, world, areas_data)
     kind = action_ctx["kind"]
 
-    if kind == "explore" and present:
-        hook = pick_explore_hook(present, player)
+    if kind == "explore" and area_present:
+        hook = pick_explore_hook(area_present, player)
         if hook and not action_ctx.get("target_id"):
             action_ctx["target_id"] = hook["id"]
             action_ctx["explore_hook"] = True
             player["scene_focus"] = hook["id"]
             with state_lock():
                 save(PLAYER_FILE, player)
+        present = resolve_scene_present(area_present, player, action_ctx, npcs)
 
     if kind == "find":
         found = resolve_find_person(action, player, present, npcs)
@@ -626,6 +640,8 @@ def process_player_action(action, *, on_prose_chunk=None):
         if pron:
             action_ctx["target_id"] = pron["id"]
 
+    present = resolve_scene_present(area_present, player, action_ctx, npcs)
+
     if (
         not action_ctx.get("target_id")
         and not action_ctx.get("absent_npc")
@@ -675,6 +691,7 @@ def process_player_action(action, *, on_prose_chunk=None):
             ).strip()
             with state_lock():
                 save(PLAYER_FILE, player)
+            present = resolve_scene_present(area_present, player, action_ctx, npcs)
         else:
             action_ctx["approach_failed"] = True
             fail_msg = local_msg or (
@@ -710,6 +727,8 @@ def process_player_action(action, *, on_prose_chunk=None):
                 events = all_events()
                 rumors = load(RUMOR_FILE, [])
             present = _present_npcs(npcs, player)
+            area_present = present
+            present = resolve_scene_present(area_present, player, action_ctx, npcs)
             sync_scene_focus(player, present, npcs)
             digest = build_arrival_digest(travel_before, chosen)
             extra_directive = msg + " " + digest
@@ -732,6 +751,8 @@ def process_player_action(action, *, on_prose_chunk=None):
             save(NPC_FILE, npcs)
             save(WORLD_FILE, world)
         present = _present_npcs(npcs, player)
+        area_present = present
+        present = resolve_scene_present(area_present, player, action_ctx, npcs)
         tid = action_ctx.get("target_id")
         target_npc = npcs.get(tid) if tid else None
         if target_npc and target_npc.get("area") == player.get("area"):
@@ -1007,6 +1028,8 @@ def process_player_action(action, *, on_prose_chunk=None):
             player = load(PLAYER_FILE, {})
             npcs = load(NPC_FILE, {})
             present = _present_npcs(npcs, player)
+            area_present = present
+            present = resolve_scene_present(area_present, player, action_ctx, npcs)
             if combat_target:
                 action_ctx["target_id"] = combat_target
                 action_ctx["memory_tag"] = "attack"
@@ -1018,6 +1041,9 @@ def process_player_action(action, *, on_prose_chunk=None):
                 save(PLAYER_FILE, player)
         extra_directive = directive or err or extra_directive
 
+    area_present = _present_npcs(npcs, player)
+    present = resolve_scene_present(area_present, player, action_ctx, npcs)
+    persist_scene_cast(player, present, action_ctx)
     focus_npcs, crowd_note, focal_id = select_scene_cast(present, player, action_ctx)
     with state_lock():
         save(PLAYER_FILE, player)
@@ -1220,6 +1246,7 @@ def process_player_action(action, *, on_prose_chunk=None):
             "subplace": (player.get("scene_subplace") or {}).get("id"),
             "focus_npc": focus_npc,
             "focus_cast": [n["id"] for n in focus_npcs],
+            "scene_cast_ids": [n["id"] for n in present],
             "present_ids": [n["id"] for n in present],
             "approach_failed": bool(action_ctx.get("approach_failed")),
             "travel_failed": bool(action_ctx.get("travel_failed")),
