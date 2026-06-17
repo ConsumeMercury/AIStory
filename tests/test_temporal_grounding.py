@@ -156,6 +156,29 @@ def test_coal_chute_promise_records_and_matches_wait():
     assert result.get("event")
 
 
+def test_third_bell_test_of_iron_records():
+    player = {"scheduled_events": {}}
+    world = {"hour_count": 10, "hour": 10}
+    scene = (
+        'Bessa promises a gathering at the timber docks when the third bell rings. '
+        "A test of iron."
+    )
+    assert record_scheduled_events(player, scene, "docks", world)
+    store = player["scheduled_events"]["docks"]
+    assert "third_bell" in store or "third_bell_gathering" in store or "test_of_iron" in store
+    event = parse_wait_for_event("Wait for the third bell", player, "docks")
+    assert event
+
+
+def test_schedule_untagged_flagged_by_gate():
+    from simulation.fact_gate import validate_schedule_emission
+
+    scene = 'Meet me when the third bell rings — a test of iron.'
+    issue = validate_schedule_emission(scene)
+    assert issue
+    assert "SCHEDULE" in issue
+
+
 def test_wait_until_dawn_updates_time_of_day():
     from simulation.world_clock import advance_clock, _recompute
 

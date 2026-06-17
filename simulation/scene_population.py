@@ -64,14 +64,22 @@ def bootstrap_scene_cast(all_present, player, action_ctx, npcs, *, max_cast=MAX_
         reverse=True,
     )
     ids = []
+    exclude = set()
+    if action_ctx.get("relocated") or action_ctx.get("left_behind_cast"):
+        exclude.update(action_ctx.get("left_behind_cast") or [])
+        old = player.get("scene_cast") or {}
+        if action_ctx.get("relocated"):
+            exclude.update(old.get("ids") or [])
     for prefer in (
         action_ctx.get("target_id"),
         player.get("scene_focus"),
     ):
-        if prefer and prefer not in ids:
+        if prefer and prefer not in ids and prefer not in exclude:
             if any(n["id"] == prefer for n in all_present):
                 ids.append(prefer)
     for n in ranked:
+        if n["id"] in exclude:
+            continue
         if n["id"] not in ids:
             ids.append(n["id"])
         if len(ids) >= max_cast:

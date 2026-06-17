@@ -42,6 +42,25 @@ def test_wrong_speaker_flags_absent_npc():
     assert "Solia" in issue
 
 
+def test_wrong_speaker_flags_left_behind():
+    from simulation.prose_validator import wrong_speaker_dialogue
+
+    npcs = {
+        "bessa": {"id": "bessa", "name": "Bessa", "status": "alive"},
+        "scraper": {"id": "scraper", "name": "Scraper", "status": "alive"},
+    }
+    present = [{"id": "scraper", "name": "Scraper"}]
+    issue = wrong_speaker_dialogue(
+        'Bessa murmured, "Stay."',
+        None,
+        present,
+        npcs,
+        left_behind=["bessa"],
+    )
+    assert issue
+    assert "left-behind" in issue.lower() or "Bessa" in issue
+
+
 def test_analyze_prose_includes_place_and_speaker_checks():
     npcs = {"p1": _npc("p1")}
     player = {"scene_focus": "p1", "known_npcs": {"p1": {"name_known": True}}}
@@ -136,6 +155,8 @@ def test_prose_issues_recorded_in_turn_trace(monkeypatch):
             {},
             ["LOCATION LOCK violated: harbor district"],
             [],
+            [],
+            {"mode": "off", "invoked": False},
         ),
     )
     with patch("simulation.story_loop.get_narrator", return_value=mock_narr):

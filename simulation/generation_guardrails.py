@@ -75,7 +75,9 @@ def build_misname_directive(action, target_npc, npcs, target_id):
     )
 
 
-def build_hard_constraints_block(focal_npc_id, focal_npc, scene_place, action_context=None, present=None):
+def build_hard_constraints_block(
+    focal_npc_id, focal_npc, scene_place, action_context=None, present=None, npcs=None,
+):
     """
     Final pre-write constraints — location, movement, and focal identity.
     Simulation passes these explicitly; the narrator must not re-derive them.
@@ -130,6 +132,17 @@ def build_hard_constraints_block(focal_npc_id, focal_npc, scene_place, action_co
         lines.append(
             "- RELOCATION — prior conversation partner does NOT follow into this sub-place."
         )
+        left = list(ctx.get("left_behind_cast") or [])
+        if left:
+            names = []
+            for nid in left[:6]:
+                npc = (npcs or {}).get(nid, {})
+                names.append(npc.get("name") or nid)
+            lines.append(
+                "- LEFT BEHIND (must NOT speak or dominate this beat): "
+                + ", ".join(names)
+                + "."
+            )
     if focal_npc_id and focal_npc:
         known_name = focal_npc.get("name")
         label = known_name or short_descriptor(focal_npc)

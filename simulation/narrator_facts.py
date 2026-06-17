@@ -96,6 +96,10 @@ def validate_narrator_facts(facts, player, npcs, scene_state, action_ctx, focal_
     ctx = action_ctx or {}
 
     for nid in facts.get("speaking") or []:
+        if nid in set(ctx.get("left_behind_cast") or []):
+            issues.append(
+                f"FACT tag declares left-behind npc {nid!r} as speaking in relocated scene"
+            )
         if cast_ids and nid not in cast_ids:
             issues.append(
                 f"FACT tag declares speaking npc {nid!r} not in scene cast"

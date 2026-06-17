@@ -13,7 +13,7 @@ def test_validate_turn_output_death_tag():
     )
     npcs = {"v1": {"id": "v1", "name": "Victim", "status": "alive", "role": "merchant"}}
     text = "The body stills. [FACT: death | v1]"
-    issues, facts, prose_issues, fact_issues = validate_turn_output(
+    issues, facts, prose_issues, fact_issues, auditor_issues, auditor_meta = validate_turn_output(
         text,
         player={},
         npcs=npcs,

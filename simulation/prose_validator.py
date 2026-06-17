@@ -179,11 +179,12 @@ def place_drift(text, scene_place):
     return None
 
 
-def wrong_speaker_dialogue(text, focal_npc_id, present_npcs, npcs, known_ids=None):
+def wrong_speaker_dialogue(text, focal_npc_id, present_npcs, npcs, known_ids=None, left_behind=None):
     """Flag dialogue attributed to a non-focal or absent NPC."""
     if not text:
         return None
     present_ids = {n.get("id") for n in (present_npcs or [])}
+    left_behind = set(left_behind or [])
     known_ids = set(known_ids or [])
     focal_name = ((npcs or {}).get(focal_npc_id, {}).get("name") or "").strip().lower()
     for nid, npc in (npcs or {}).items():
@@ -194,7 +195,9 @@ def wrong_speaker_dialogue(text, focal_npc_id, present_npcs, npcs, known_ids=Non
             continue
         if focal_name and name.lower() == focal_name:
             continue
-        if nid not in present_ids:
+        if nid in left_behind:
+            scope = "left-behind"
+        elif nid not in present_ids:
             scope = "absent"
         elif nid != focal_npc_id:
             scope = "non-focal"
@@ -265,6 +268,7 @@ def analyze_prose(text, ctx, player, npcs):
         ctx.get("present_npcs") or [],
         npcs,
         known_ids=ctx.get("known_ids"),
+        left_behind=ctx.get("left_behind_cast"),
     )
     if speaker:
         issues.append(speaker)

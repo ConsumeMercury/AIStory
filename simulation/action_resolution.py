@@ -236,19 +236,24 @@ def resolve_combat_target(action, player, present, npcs, monsters, area, city):
     return None, None
 
 
-def pick_explore_hook(present, player):
-    """One real NPC to anchor first explore beat — not a ghost."""
+def pick_explore_hook(present, player, action_ctx=None):
+    """One real NPC to anchor first explore beat — must be in scene cast, not whole district."""
     if not present:
         return None
+    ctx = action_ctx or {}
+    exclude = set(ctx.get("left_behind_cast") or [])
+    candidates = [n for n in present if n["id"] not in exclude]
+    if not candidates:
+        return None
     focus = player.get("scene_focus")
-    if focus:
-        for n in present:
+    if focus and focus not in exclude:
+        for n in candidates:
             if n["id"] == focus:
                 return n
-    keyed = [n for n in present if n.get("key_npc")]
+    keyed = [n for n in candidates if n.get("key_npc")]
     if keyed:
         return keyed[0]
-    return present[0]
+    return candidates[0]
 
 
 def validate_acquire_item(action, player, area):

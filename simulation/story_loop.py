@@ -30,7 +30,6 @@ from simulation.prose_validator import (
     log_scene_prose_issues,
     build_prose_correction_block,
     queue_prose_correction,
-    prose_retry_limit,
 )
 from simulation.npc_continuity import ensure_npc_continuity_locks
 from simulation.journal_summary import maybe_compact_journal
@@ -241,9 +240,9 @@ def _generate_scene_with_validation(
 
     scene = get_narrator().generate_scene(**kwargs)
     if not scene or len(scene) < 40:
-        return scene, []
+        return scene, [], {}
 
-    issues, _facts, prose_issues, fact_issues = validate_turn_output(
+    issues, _facts, prose_issues, fact_issues, auditor_issues, auditor_meta = validate_turn_output(
         scene,
         player=player,
         npcs=npcs,
@@ -254,17 +253,25 @@ def _generate_scene_with_validation(
         known_ids=known_ids,
         scene_state=scene_state,
     )
-    retries = prose_retry_limit()
+    from simulation.regen_governor import apply_regen_governor
     attempt = 0
-    while issues and attempt < retries:
+    regen_meta = {}
+    while issues:
+        ranked, should_retry, regen_meta = apply_regen_governor(issues, attempt)
+        issues = ranked
+        action_ctx["regen_governor"] = regen_meta
+        if not should_retry:
+            break
         attempt += 1
-        correction = build_combined_correction_block(prose_issues, fact_issues)
+        correction = build_combined_correction_block(
+            prose_issues, fact_issues, auditor_issues,
+        )
         merged = ((extra_directive or "") + "\n\n" + correction).strip()
         action_ctx["prose_retry"] = attempt
         scene = get_narrator().generate_scene(
             **{**kwargs, "extra_directive": merged, "on_prose_chunk": None},
         )
-        issues, _facts, prose_issues, fact_issues = validate_turn_output(
+        issues, _facts, prose_issues, fact_issues, auditor_issues, auditor_meta = validate_turn_output(
             scene,
             player=player,
             npcs=npcs,
@@ -290,8 +297,33 @@ def _generate_scene_with_validation(
         with state_lock():
             pl = load(PLAYER_FILE, {})
             queue_prose_correction(pl, issues)
+            from simulation.regen_governor import build_regen_exhausted_directive
+            exhausted = build_regen_exhausted_directive(issues)
+            if exhausted and regen_meta.get("exhausted"):
+                pl.setdefault("delayed_directives", []).append({
+                    "summary": "regen exhausted",
+                    "directive": exhausted[:900],
+                })
+                pl["delayed_directives"] = (pl.get("delayed_directives") or [])[-10:]
             save(PLAYER_FILE, pl)
-    return scene, issues
+
+    from simulation.boundary_metrics import build_output_boundary
+    output_boundary = build_output_boundary(
+        kind=(action_ctx or {}).get("kind"),
+        action_ctx=action_ctx,
+        raw_scene=scene,
+        prose_issues=prose_issues,
+        fact_issues=fact_issues,
+        prose_retry=action_ctx.get("prose_retry", 0),
+        focal_id=focal_id,
+        auditor_issues=auditor_issues,
+        auditor_meta=auditor_meta,
+        regen_meta=regen_meta,
+    )
+    output_boundary["prose_issues"] = list(prose_issues or [])
+    output_boundary["fact_issues"] = list(fact_issues or [])
+    output_boundary["auditor_issues"] = list(auditor_issues or [])
+    return scene, issues, output_boundary
 
 
 def _do_combat(player, npcs, monsters, present, tick, action, action_ctx):
@@ -568,8 +600,8 @@ def process_player_action(action, *, on_prose_chunk=None):
     resolve_target_and_absence(action, player, present, npcs, action_ctx, world, areas_data)
     kind = action_ctx["kind"]
 
-    if kind == "explore" and area_present:
-        hook = pick_explore_hook(area_present, player)
+    if kind == "explore" and present:
+        hook = pick_explore_hook(present, player, action_ctx)
         if hook and not action_ctx.get("target_id"):
             action_ctx["target_id"] = hook["id"]
             action_ctx["explore_hook"] = True
@@ -690,6 +722,9 @@ def process_player_action(action, *, on_prose_chunk=None):
     if kind == "approach":
         sub, local_msg = resolve_local_movement(action, player, player.get("area"))
         if sub:
+            prior_ids = list((player.get("scene_cast") or {}).get("ids") or [])
+            if prior_ids:
+                action_ctx["left_behind_cast"] = prior_ids
             extra_directive = local_msg
             player["scene_focus"] = None
             action_ctx["target_id"] = None
@@ -702,8 +737,8 @@ def process_player_action(action, *, on_prose_chunk=None):
             with state_lock():
                 save(PLAYER_FILE, player)
             scene_state, present, area_present = _refresh_scene(
-            player, npcs, world, action_ctx, tick, persist=False,
-        )
+                player, npcs, world, action_ctx, tick, persist=False,
+            )
         else:
             action_ctx["approach_failed"] = True
             fail_msg = local_msg or (
@@ -1046,8 +1081,8 @@ def process_player_action(action, *, on_prose_chunk=None):
             present = _present_npcs(npcs, player)
             area_present = present
             scene_state, present, area_present = _refresh_scene(
-            player, npcs, world, action_ctx, tick, persist=False,
-        )
+                player, npcs, world, action_ctx, tick, persist=False,
+            )
             if combat_target:
                 action_ctx["target_id"] = combat_target
                 action_ctx["memory_tag"] = "attack"
@@ -1162,7 +1197,7 @@ def process_player_action(action, *, on_prose_chunk=None):
         ).strip()
 
     hard_constraints = build_hard_constraints_block(
-        focal_id, focal_npc, scene_place, action_ctx, present=present,
+        focal_id, focal_npc, scene_place, action_ctx, present=present, npcs=npcs,
     )
     sched_block = build_scheduled_events_block(player, player.get("area"), world)
     if sched_block:
@@ -1180,12 +1215,15 @@ def process_player_action(action, *, on_prose_chunk=None):
 
     scene_action = replay_action if action_ctx.get("clarification_resolved") else action
 
+    output_boundary = {}
+    tagged_issues = []
+
     if action_ctx.get("target_ambiguous"):
         pending = player.get("pending_target_clarification") or {}
         scene = build_clarification_scene(pending)
         prose_issues = []
     else:
-        scene, prose_issues = _generate_scene_with_validation(
+        scene, prose_issues, output_boundary = _generate_scene_with_validation(
             action=scene_action,
             world=world,
             player=player,
@@ -1211,6 +1249,24 @@ def process_player_action(action, *, on_prose_chunk=None):
             npcs=npcs,
             scene_state=scene_state,
         )
+
+    from simulation.boundary_metrics import (
+        build_turn_boundary,
+        tag_turn_issues,
+        update_session_boundary_stats,
+        log_boundary_turn,
+        persist_boundary_trace,
+    )
+    turn_boundary = build_turn_boundary(action_ctx, output_boundary)
+    tagged_issues = tag_turn_issues(
+        output_boundary.get("prose_issues") or prose_issues,
+        output_boundary.get("fact_issues") or [],
+        action_ctx,
+        turn_boundary,
+        auditor_issues=output_boundary.get("auditor_issues"),
+    )
+
+    log_boundary_turn(tick, turn_boundary, tagged_issues)
 
     if name_reveal:
         with state_lock():
@@ -1274,7 +1330,35 @@ def process_player_action(action, *, on_prose_chunk=None):
             "travel_failed": bool(action_ctx.get("travel_failed")),
             "target_ambiguous": bool(action_ctx.get("target_ambiguous")),
             "combat_fatal": action_ctx.get("combat_fatal") if kind == "attack" else player.get("last_combat_fatal"),
+            "boundary": {
+                "classifier_mode": turn_boundary.get("classifier_mode"),
+                "classifier_invoked": turn_boundary.get("classifier_invoked"),
+                "classifier_disagrees": turn_boundary.get("classifier_disagrees"),
+                "classifier_applied": turn_boundary.get("classifier_applied"),
+                "facts_tag_count": (turn_boundary.get("facts") or {}).get("tag_count", 0),
+                "facts_expected": turn_boundary.get("facts_expected"),
+                "facts_missing": turn_boundary.get("facts_missing"),
+                "gate_active": turn_boundary.get("gate_active"),
+                "prose_retry": turn_boundary.get("prose_retry"),
+                "auditor_mode": turn_boundary.get("auditor_mode"),
+                "auditor_nominations": turn_boundary.get("auditor_nominations"),
+                "auditor_confirmed": turn_boundary.get("auditor_confirmed"),
+                "regen_exhausted": turn_boundary.get("regen_exhausted"),
+                "schedule_untagged": turn_boundary.get("schedule_untagged"),
+                "tagged_shapes": [t.get("shape") for t in tagged_issues],
+            },
         })
+        update_session_boundary_stats(player, turn_boundary, tagged_issues)
+        persist_boundary_trace(
+            player,
+            tick=tick,
+            action=action,
+            kind=kind,
+            turn_boundary=turn_boundary,
+            tagged_issues=tagged_issues,
+            action_ctx=action_ctx,
+            scene_cast_ids=[n["id"] for n in present],
+        )
         maybe_compact_journal(player, npcs)
         player["journal"] = player["journal"][-300:]
         save(PLAYER_FILE, player)
@@ -1292,6 +1376,8 @@ def process_player_action(action, *, on_prose_chunk=None):
         scene_preview=(scene or "")[:240],
         area_arrival=area_arrival,
         prose_issues=prose_issues or None,
+        boundary=turn_boundary,
+        tagged_issues=tagged_issues or None,
         memory_debug=action_ctx.get("memory_debug"),
         generation_settings=action_ctx.get("generation_settings"),
     )

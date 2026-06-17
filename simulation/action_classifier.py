@@ -13,6 +13,7 @@ import os
 import re
 
 from generation.descriptor_generator import short_descriptor
+from simulation.boundary_metrics import build_classifier_diff
 from simulation.action_vocab import (
     FAST_PATH_KINDS,
     HIGH_STAKES_KINDS,
@@ -182,16 +183,51 @@ def apply_classifier_to_ctx(action, player, present_npcs, npcs, regex_ctx, scene
     Returns updated ctx (same dict, mutated).
     """
     mode = classifier_mode()
+    regex_snapshot = {
+        "kind": regex_ctx.get("kind"),
+        "target_id": regex_ctx.get("target_id"),
+        "player_speech": regex_ctx.get("player_speech"),
+    }
+    bc = {
+        "mode": mode,
+        "invoked": False,
+        "disagrees": False,
+        "diffs": [],
+        "skip_reason": None,
+        "error": None,
+    }
     if mode == "off" or not scene:
+        bc["skip_reason"] = "mode_off" if mode == "off" else "no_scene"
+        regex_ctx["boundary_classifier"] = bc
         return regex_ctx
 
-    validated = classify_action_llm(action, scene, player, regex_ctx)
-    if not validated:
+    if not needs_llm_classifier(action, regex_ctx, scene):
+        bc["skip_reason"] = "fast_path"
+        regex_ctx["boundary_classifier"] = bc
         return regex_ctx
+
+    bc["invoked"] = True
+    try:
+        validated = classify_action_llm(action, scene, player, regex_ctx)
+    except Exception as e:
+        bc["error"] = str(e)[:200]
+        bc["skip_reason"] = "classifier_error"
+        regex_ctx["boundary_classifier"] = bc
+        return regex_ctx
+
+    if not validated:
+        bc["skip_reason"] = "classifier_failed"
+        regex_ctx["boundary_classifier"] = bc
+        return regex_ctx
+
+    diff = build_classifier_diff(regex_snapshot, validated)
+    bc.update(diff)
+    bc["validated"] = validated
 
     if mode == "shadow":
-        _log_shadow_diff(action, regex_ctx, validated)
+        _log_shadow_diff(action, regex_snapshot, validated)
         regex_ctx["classifier_shadow"] = validated
+        regex_ctx["boundary_classifier"] = bc
         return regex_ctx
 
     # mode == "on"
@@ -211,4 +247,5 @@ def apply_classifier_to_ctx(action, player, present_npcs, npcs, regex_ctx, scene
         regex_ctx["time_target_hint"] = validated["time_target"]
     if validated["kind"] in HIGH_STAKES_KINDS and old_kind != validated["kind"]:
         regex_ctx["classifier_high_stakes"] = True
+    regex_ctx["boundary_classifier"] = bc
     return regex_ctx

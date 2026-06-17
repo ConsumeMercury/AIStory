@@ -116,6 +116,93 @@ def test_journal_fallback_when_scene_cast_missing():
     assert {n["id"] for n in present} == {"g1", "s1"}
 
 
+def test_relocate_excludes_left_behind_cast():
+    bessa = _npc("bessa", role="herbalist", name="Bessa")
+    bessa["key_npc"] = True
+    scraper = _npc("scraper", role="laborer", name="Scraper")
+    corner = _npc("voice", role="laborer", name="Voice")
+    area = [bessa, scraper, corner, _npc("x1"), _npc("x2")]
+    npcs = {n["id"]: n for n in area}
+    player = {
+        "area": "docks",
+        "scene_subplace": {"id": "cellar", "label": "Cellar"},
+        "scene_focus": "bessa",
+        "scene_cast": {
+            "area": "docks",
+            "subplace": "timber_docks",
+            "ids": ["bessa", "x1"],
+        },
+        "known_npcs": {"bessa": {"name_known": True}},
+    }
+    ctx = {
+        "kind": "approach",
+        "relocated": True,
+        "left_behind_cast": ["bessa", "x1"],
+    }
+    present = resolve_scene_present(area, player, ctx, npcs)
+    ids = {n["id"] for n in present}
+    assert "bessa" not in ids
+    assert "x1" not in ids
+    assert len(present) >= 1
+
+
+def test_promotion_relocate_excludes_prior_cast():
+    from simulation.local_places import resolve_local_movement
+
+    bessa = _npc("bessa", role="herbalist", name="Bessa")
+    bessa["key_npc"] = True
+    scraper = _npc("scraper", role="laborer", name="Scraper")
+    area = [bessa, scraper, _npc("x1"), _npc("x2")]
+    npcs = {n["id"]: n for n in area}
+    player = {
+        "area": "docks",
+        "scene_subplace": {"id": "timber_docks", "label": "Timber docks"},
+        "scene_focus": "bessa",
+        "scene_cast": {
+            "area": "docks",
+            "subplace": "timber_docks",
+            "ids": ["bessa", "x1"],
+        },
+        "journal": [{
+            "area": "docks",
+            "scene": "She points toward the cellar with the split red door.",
+            "excerpt": "cellar with the split red door",
+        }],
+        "story_flags": {},
+        "narrator_places": {},
+        "known_npcs": {"bessa": {"name_known": True}},
+    }
+    prior_ids = list(player["scene_cast"]["ids"])
+    sub, _msg = resolve_local_movement(
+        "go to the cellar with the split red door", player, "docks",
+    )
+    assert sub
+    assert "cellar" in sub["id"] or "cellar" in sub["label"].lower()
+    ctx = {
+        "kind": "approach",
+        "relocated": True,
+        "left_behind_cast": prior_ids,
+    }
+    present = resolve_scene_present(area, player, ctx, npcs)
+    ids = {n["id"] for n in present}
+    assert "bessa" not in ids
+    assert len(present) >= 1
+
+
+def test_explore_hook_skips_left_behind():
+    from simulation.action_resolution import pick_explore_hook
+
+    bessa = _npc("bessa", role="herbalist", name="Bessa")
+    bessa["key_npc"] = True
+    scraper = _npc("scraper", role="laborer", name="Scraper")
+    present = [bessa, scraper]
+    player = {"scene_focus": "bessa", "scene_cast": {"ids": ["scraper"]}}
+    hook = pick_explore_hook(
+        present, player, {"left_behind_cast": ["bessa"], "relocated": True},
+    )
+    assert hook["id"] == "scraper"
+
+
 def test_clarification_directive_binds_identity():
     npc = _npc("g1", role="guard", name="Kasah Stonehand")
     text = build_clarification_identity_directive(npc)

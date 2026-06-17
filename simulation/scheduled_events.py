@@ -18,6 +18,20 @@ _SCHEDULE_TAG = re.compile(
 
 # Legacy regex fallbacks — kept for older saves/tests, not primary capture.
 _EVENT_PROMISES = (
+    (re.compile(r"\b(?:when|at|until)\s+(?:the\s+)?third\s+bell\b", re.I),
+     "third_bell", 3, "the third bell"),
+    (re.compile(r"\bthird\s+bell\s+rings?\b", re.I),
+     "third_bell", 3, "the third bell rings"),
+    (re.compile(r"\b(?:gathering|meet(?:ing)?)\b.*\b(?:third|3rd)\s+bell\b", re.I),
+     "third_bell_gathering", 3, "gathering at the third bell"),
+    (re.compile(r"\b(?:third|3rd)\s+bell\b.*\b(?:gathering|meet(?:ing)?|timber\s+docks?)\b", re.I),
+     "third_bell_gathering", 3, "gathering at the third bell"),
+    (re.compile(r"\btest\s+of\s+iron\b", re.I),
+     "test_of_iron", 3, "a test of iron"),
+    (re.compile(r"\b(?:third|3rd)\s+bell\b.*\btest\s+of\s+iron\b", re.I),
+     "third_bell_iron_test", 3, "the third bell — a test of iron"),
+    (re.compile(r"\btest\s+of\s+iron\b.*\b(?:third|3rd)\s+bell\b", re.I),
+     "third_bell_iron_test", 3, "the third bell — a test of iron"),
     (re.compile(r"\b(?:wait for|at|until)\s+(?:the\s+)?third\s+(?:toll|bell)\b", re.I),
      "third_toll", 3, "the third toll of the bell"),
     (re.compile(r"\bthird\s+(?:toll|bell)\s+of\s+the\s+bell\b", re.I),
@@ -178,6 +192,10 @@ def _event_query_match(query, event):
     if q_norm and (q_norm in l_norm or l_norm in q_norm):
         return True
     if "third toll" in query and "third" in eid:
+        return True
+    if "third bell" in query and ("third" in eid or "bell" in eid):
+        return True
+    if "test of iron" in query and "iron" in eid:
         return True
     if "second toll" in query and "second" in eid:
         return True

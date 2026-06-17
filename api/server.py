@@ -249,7 +249,32 @@ def create_app():
     def debug_last_turn():
         if not debug_enabled():
             raise HTTPException(status_code=404, detail="Set AISTORY_DEBUG=1 to enable debug endpoints.")
-        return get_last_turn()
+        from simulation.turn_trace import get_boundary_history, get_boundary_summary
+        return {
+            **get_last_turn(),
+            "boundary_history_summary": get_boundary_summary(),
+        }
+
+    @app.get("/api/debug/boundary")
+    def debug_boundary():
+        if not debug_enabled():
+            raise HTTPException(status_code=404, detail="Set AISTORY_DEBUG=1 to enable debug endpoints.")
+        from simulation.turn_trace import get_boundary_history, get_boundary_summary, get_last_turn
+        from simulation.boundary_metrics import summarize_player_boundary_history
+        player = load("player/player.json", {})
+        saved_hist = player.get("boundary_history") or []
+        mem_hist = get_boundary_history()
+        history = saved_hist if saved_hist else mem_hist
+        return {
+            "session_stats": player.get("boundary_stats") or {},
+            "last_turn_trace": player.get("last_boundary_trace") or get_last_turn(),
+            "history_summary": (
+                summarize_player_boundary_history(saved_hist)
+                if saved_hist
+                else get_boundary_summary()
+            ),
+            "recent": history[-10:],
+        }
 
     @app.get("/api/debug/summary")
     def debug_summary():
