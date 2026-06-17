@@ -168,6 +168,33 @@ def test_travel_failed_inherits_prior_present_set():
     assert "Same people" in note
 
 
+def test_ask_when_reconstructs_shipment_question():
+    action = "Ask the man when the next shipment comes through"
+    speech = speech_for_ask_about(action)
+    assert speech == "When does the next shipment come through?"
+    ctx = interpret_action(action, {"scene_focus": "m1", "known_npcs": {}}, [_npc("m1", role="merchant")], {})
+    assert ctx["kind"] == "ask_about"
+    assert ctx["player_speech"] == speech
+
+
+def test_compound_tell_and_ask_produces_no_speech():
+    action = (
+        "Tell him I'll wait here until the morning crews arrive, "
+        "and ask what time they start"
+    )
+    speech = extract_player_speech(action, {}, kind="talk")
+    assert speech is None
+    ctx = interpret_action(action, {"scene_focus": "m1", "known_npcs": {}}, [_npc("m1")], {})
+    assert ctx.get("player_speech") is None
+
+
+def test_mangled_when_fragment_reconstructs_not_echoes():
+    action = "When the next shipment comes through?"
+    speech = speech_for_ask_about(action)
+    assert speech == "When does the next shipment come through?"
+    assert "shipment comes through?" != speech
+
+
 def test_misname_directive_flags_wrong_name():
     from simulation.generation_guardrails import build_misname_directive
 

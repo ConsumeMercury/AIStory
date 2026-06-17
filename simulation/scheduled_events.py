@@ -5,7 +5,18 @@ Distinct from npc_schedule.py (NPC daily routines).
 
 import re
 
-# (pattern, event_id, hours_from_now, human label)
+# Structured narrator emission — phrasing-independent capture.
+# [SCHEDULE: event_id | human label | +Nh]  or  [SCHEDULE: human label | +Nh]
+_SCHEDULE_TAG = re.compile(
+    r"\[SCHEDULE:\s*(?:"
+    r"(?P<id>[\w-]+)\s*\|\s*(?P<label_id>[^|\]]+?)\s*\|\s*\+(?P<hours_id>\d+)h?\s*"
+    r"|"
+    r"(?P<label>[^|\]]+?)\s*\|\s*\+(?P<hours>\d+)h?\s*"
+    r")\]",
+    re.I,
+)
+
+# Legacy regex fallbacks — kept for older saves/tests, not primary capture.
 _EVENT_PROMISES = (
     (re.compile(r"\b(?:wait for|at|until)\s+(?:the\s+)?third\s+(?:toll|bell)\b", re.I),
      "third_toll", 3, "the third toll of the bell"),
@@ -25,6 +36,49 @@ _WAIT_FOR_EVENT = re.compile(
 )
 
 
+def _slug(text):
+    return re.sub(r"[^a-z0-9]+", "_", (text or "").lower()).strip("_")[:48]
+
+
+def _event_tokens(text):
+    stop = {"the", "a", "an", "to", "for", "at", "of", "and", "when", "until", "wait"}
+    return {
+        t for t in re.findall(r"[a-z0-9]+", (text or "").lower())
+        if t not in stop and len(t) > 1
+    }
+
+
+def parse_schedule_tags(text):
+    """Extract structured [SCHEDULE: … | +Nh] tags from narrator output."""
+    if not text:
+        return []
+    found = []
+    seen = set()
+    for m in _SCHEDULE_TAG.finditer(text):
+        if m.group("id"):
+            eid = m.group("id").strip().lower()
+            label = (m.group("label_id") or "").strip()
+            hours = int(m.group("hours_id") or 0)
+        else:
+            label = (m.group("label") or "").strip()
+            eid = _slug(label) or "scheduled_event"
+            hours = int(m.group("hours") or 0)
+        if not label or hours <= 0 or eid in seen:
+            continue
+        seen.add(eid)
+        found.append({"id": eid, "label": label, "hours_from_now": hours, "source": "tag"})
+    return found
+
+
+def strip_schedule_tags(text):
+    """Remove simulation tags before showing prose to the player."""
+    if not text:
+        return text
+    cleaned = _SCHEDULE_TAG.sub("", text)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
 def _area_store(player, area_id):
     if not area_id:
         return {}
@@ -32,18 +86,23 @@ def _area_store(player, area_id):
 
 
 def extract_event_promises(text):
-    """Find schedulable event promises in prose or dialogue."""
+    """Find schedulable event promises in prose, dialogue, or structured tags."""
     if not text:
         return []
     found = []
     seen = set()
+    for p in parse_schedule_tags(text):
+        if p["id"] in seen:
+            continue
+        seen.add(p["id"])
+        found.append(p)
     for pattern, eid, delta, label in _EVENT_PROMISES:
         if not pattern.search(text):
             continue
         if eid in seen:
             continue
         seen.add(eid)
-        found.append({"id": eid, "label": label, "hours_from_now": delta})
+        found.append({"id": eid, "label": label, "hours_from_now": delta, "source": "regex"})
     return found
 
 
@@ -67,13 +126,14 @@ def record_scheduled_events(player, scene, area_id, world):
                 "label": p["label"],
                 "fires_at_hour": hc + p["hours_from_now"],
                 "fired": False,
-                "source": "narration",
+                "source": p.get("source", "narration"),
             }
             changed = True
         else:
             rec = store[eid]
             if not rec.get("fired") and rec.get("fires_at_hour", hc) <= hc:
                 rec["fires_at_hour"] = hc + p["hours_from_now"]
+                rec["label"] = p["label"]
                 changed = True
     return changed
 
@@ -81,6 +141,39 @@ def record_scheduled_events(player, scene, area_id, world):
 def list_pending_events(player, area_id):
     store = _area_store(player, area_id)
     return [e for e in store.values() if not e.get("fired")]
+
+
+def _event_query_match(query, event):
+    """Token overlap between wait-for phrasing and a stored event."""
+    if not query:
+        return False
+    label = (event.get("label") or "").lower()
+    eid = (event.get("id") or "").lower()
+    q = _event_tokens(query)
+    if not q:
+        return False
+    label_t = _event_tokens(label)
+    id_t = _event_tokens(eid.replace("_", " "))
+    overlap = q & (label_t | id_t)
+    if len(overlap) >= 2:
+        return True
+    if len(overlap) >= 1 and len(q) <= 4:
+        return True
+    if query in label or label in query:
+        return True
+    q_norm = re.sub(r"[^a-z0-9]+", " ", query)
+    l_norm = re.sub(r"[^a-z0-9]+", " ", label)
+    if q_norm and (q_norm in l_norm or l_norm in q_norm):
+        return True
+    if "third toll" in query and "third" in eid:
+        return True
+    if "second toll" in query and "second" in eid:
+        return True
+    if "first toll" in query and "first" in eid:
+        return True
+    if "tide" in query and "bell" in query and "tide" in label and "bell" in label:
+        return True
+    return False
 
 
 def parse_wait_for_event(action, player, area_id):
@@ -92,19 +185,11 @@ def parse_wait_for_event(action, player, area_id):
         return None
     store = _area_store(player, area_id)
     m = _WAIT_FOR_EVENT.search(action.strip())
-    query = (m.group(1) if m else "").lower().strip()
+    query = (m.group(1) if m else action).lower().strip()
     for event in store.values():
         if event.get("fired"):
             continue
-        label = (event.get("label") or "").lower()
-        eid = event.get("id", "")
-        if query and (query in label or label in query):
-            return event
-        if "third toll" in query and "third" in eid:
-            return event
-        if "second toll" in query and "second" in eid:
-            return event
-        if "first toll" in query and "first" in eid:
+        if _event_query_match(query, event):
             return event
     return None
 
@@ -145,7 +230,11 @@ def build_scheduled_events_block(player, area_id, world):
     else:
         lines.append("- None scheduled — do NOT promise specific bell tolls, auctions, or timed meetings.")
     lines.append(
-        "- Do NOT invent timed plot events the player can wait for unless listed above."
+        "- When you promise a timed plot event in dialogue, append on its own line: "
+        "[SCHEDULE: event_id | human-readable label | +Nh] (simulation tag — stripped from player prose)."
+    )
+    lines.append(
+        "- Do NOT invent timed plot events the player can wait for unless listed above or tagged."
     )
     return "\n".join(lines)
 

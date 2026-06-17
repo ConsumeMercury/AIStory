@@ -78,6 +78,7 @@ from simulation.scheduled_events import (
     fire_due_events,
     event_fired_directive,
     build_scheduled_events_block,
+    strip_schedule_tags,
 )
 from simulation import simulation_runner
 from simulation.action_resolution import (
@@ -1155,19 +1156,20 @@ def process_player_action(action, *, on_prose_chunk=None):
 
     with state_lock():
         player = load(PLAYER_FILE, {})
+        world = load(WORLD_FILE, {})
         update_player_goals(player, kind, action_ctx, world)
+        if scene:
+            if record_narrator_places(player, scene, player.get("area")):
+                save(PLAYER_FILE, player)
+            if record_scheduled_events(player, scene, player.get("area"), world):
+                save(PLAYER_FILE, player)
+            scene = strip_schedule_tags(scene)
         cache_id = focal_id or action_ctx.get("target_id") or player.get("scene_focus")
         if cache_id and scene:
             if update_npc_narrative_cache(
                 player, cache_id, scene, npcs,
                 player_speech=action_ctx.get("player_speech"),
             ):
-                save(PLAYER_FILE, player)
-        if scene:
-            if record_narrator_places(player, scene, player.get("area")):
-                save(PLAYER_FILE, player)
-            world = load(WORLD_FILE, {})
-            if record_scheduled_events(player, scene, player.get("area"), world):
                 save(PLAYER_FILE, player)
         if kind == "investigate":
             focus_npc = None

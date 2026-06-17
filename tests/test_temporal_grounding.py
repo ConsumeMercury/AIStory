@@ -12,6 +12,8 @@ from simulation.scheduled_events import (
     parse_wait_for_event,
     hours_until_event,
     fire_due_events,
+    parse_schedule_tags,
+    strip_schedule_tags,
 )
 from simulation.local_places import (
     _promote_from_journal_query,
@@ -104,3 +106,38 @@ def test_bare_wait_uses_default_hours():
     result = resolve_wait_advance("Wait and watch", world, {}, "city:market")
     assert not result["refused"]
     assert result["hours"] == 2
+
+
+def test_schedule_tag_records_tide_bell_promise():
+    player = {"scheduled_events": {}}
+    world = {"hour_count": 20, "hour": 20}
+    scene = (
+        'He says the crews start when the tide-bell rings twice.\n'
+        "[SCHEDULE: tide_bell_twice | the tide-bell rings twice | +2h]"
+    )
+    assert record_scheduled_events(player, scene, "city:wharf", world)
+    event = parse_wait_for_event("Wait for the tide-bell to ring twice", player, "city:wharf")
+    assert event
+    assert event["id"] == "tide_bell_twice"
+    assert event["fires_at_hour"] == 22
+    assert strip_schedule_tags(scene) == "He says the crews start when the tide-bell rings twice."
+
+
+def test_schedule_tag_two_part_form():
+    tags = parse_schedule_tags("[SCHEDULE: the morning crews arrive | +3h]")
+    assert len(tags) == 1
+    assert tags[0]["hours_from_now"] == 3
+    assert "morning crews" in tags[0]["label"].lower()
+
+
+def test_wait_until_dawn_updates_time_of_day():
+    from simulation.world_clock import advance_clock, _recompute
+
+    world = {"hour_count": 99, "hour": 3, "time_of_day": "deep night", "day": 5}
+    save_backup = world.copy()
+    result = resolve_wait_advance("Wait until dawn", world, {}, "city:market")
+    assert result["hours"] == 2
+    world["hour_count"] = save_backup["hour_count"] + result["hours"]
+    _recompute(world)
+    assert world["hour"] == 5
+    assert world["time_of_day"] == "dawn"

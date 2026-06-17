@@ -149,7 +149,15 @@ def _format_wh_question(wh, rest):
     if wh == "where":
         return f"Where {rest.rstrip('?.!')}?"
     if wh == "when":
-        return f"When {rest.rstrip('?.!')}?"
+        rest = rest.rstrip("?.!")
+        if not re.match(r"^(did|do|does|will|are|is|was|were|you)\b", rest, re.I):
+            rest = re.sub(r"\bcomes\b", "come", rest, flags=re.I)
+            rest = re.sub(r"\bgoes\b", "go", rest, flags=re.I)
+            rest = re.sub(r"\barrives\b", "arrive", rest, flags=re.I)
+            rest = re.sub(r"\bstarts\b", "start", rest, flags=re.I)
+            if not rest.lower().startswith(("does ", "will ", "do ")):
+                rest = f"does {rest}"
+        return f"When {rest}?"
     if wh == "who":
         return f"Who {rest.rstrip('?.!')}?"
     if wh in ("if", "whether"):
@@ -222,20 +230,6 @@ def extract_player_speech(action, player=None, *, kind=None):
             return f"What can you tell me about {topic}?"
 
     lower = text.lower()
-    for prefix in ("i say ", "i ask ", "i tell ", "say ", "tell ", "whisper ", "shout "):
-        if prefix in lower:
-            idx = lower.index(prefix) + len(prefix)
-            rest = text[idx:].strip()
-            if rest.lower().startswith("to "):
-                rest = rest[2:].strip()
-                if rest.lower().startswith("the "):
-                    rest = rest[4:].strip()
-            if "?" in rest or rest.endswith("?"):
-                q = rest.split("?", 1)[0].strip()
-                if len(q) > 3:
-                    return q + "?"
-            elif len(rest) > 8:
-                return rest.strip().strip('"\'')
     if lower.startswith("ask ") and "for work" not in lower:
         ask_q = speech_for_ask_about(action)
         if ask_q:
@@ -251,8 +245,6 @@ def extract_player_speech(action, player=None, *, kind=None):
         if true and word.lower() in {true.lower(), true.split()[0].lower()}:
             return f"My name is {true}."
 
-    if text.endswith("?") and len(text) > 8:
-        return text.strip()
     return None
 
 
