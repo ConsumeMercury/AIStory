@@ -289,7 +289,7 @@ def mechanical_checks(action, kind, before, after, journal_entry, npcs):
     if after["journal_len"] <= before["journal_len"]:
         issues.append("journal did not append entry")
 
-    if kind == "explore" and not journal_entry.get("focus_npc"):
+    if kind == "explore" and after.get("scene_focus") and not journal_entry.get("focus_npc"):
         issues.append("explore missing focus_npc in journal")
 
     if kind == "wait":

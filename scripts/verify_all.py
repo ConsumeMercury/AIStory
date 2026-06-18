@@ -270,6 +270,7 @@ def test_simulation_audit():
     if not world_data_ready():
         ensure_world_data()
     simulation_runner.stop()
+    skipped = []
     try:
         for name, fn in [
             ("explore_anchor", audit.audit_explore_anchor),
@@ -282,12 +283,23 @@ def test_simulation_audit():
             ("withdraw_clears_focus", audit.audit_withdraw_clears_focus),
             ("focal_id_integrity", audit.audit_focal_id_integrity),
             ("travel_failed_empty_cast", audit.audit_travel_failed_empty_cast),
+            ("travel_failed_inherits_focus", audit.audit_travel_failed_inherits_focus),
             ("same_role_scholar_focus", audit.audit_same_role_scholar_focus),
             ("scheduled_event_fires_on_wait", audit.audit_scheduled_event_fires_on_wait),
+            ("approach_excludes_prior_cast", audit.audit_approach_excludes_prior_cast),
         ]:
-            fn()
+            try:
+                fn()
+            except audit.AuditSkip as exc:
+                skipped.append(f"{name} ({exc.reason})")
     finally:
+        from storage import load
+        audit._cleanup_audit_fixtures(
+            load("characters/npcs.json", {}),
+            load("player/player.json", {}),
+        )
         simulation_runner.start()
+    assert not skipped, f"simulation audits skipped: {skipped}"
 
 
 def test_smoke_test():

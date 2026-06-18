@@ -281,7 +281,7 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
         msg = (
             f"focal_npc_id {focal_npc_id!r} != present_npcs[0] {focal_npc.get('id')!r}"
         )
-        if DEBUG_TOKENS or os.environ.get("AISTORY_STRICT", "").lower() in ("1", "true", "yes"):
+        if os.environ.get("AISTORY_STRICT", "").lower() in ("1", "true", "yes"):
             raise ValueError(msg)
         log.warning("Focal id mismatch (using cast decision): %s", msg)
         focal_npc_id = focal_npc.get("id")

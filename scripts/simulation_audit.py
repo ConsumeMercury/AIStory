@@ -83,8 +83,65 @@ def _restore_player_area(player):
     return None
 
 
+def _pin_npcs_to_area(player, npcs, npc_ids, area=None):
+    """Place specific NPCs in the player's district for deterministic cast tests."""
+    from storage import save
+
+    area = area or player.get("area")
+    if not area:
+        return
+    loc = player.get("location")
+    for nid in npc_ids:
+        npc = npcs.get(nid)
+        if not npc or npc.get("status") != "alive":
+            continue
+        npc["area"] = area
+        if loc:
+            npc["location"] = loc
+        npc.pop("travel_state", None)
+    save("characters/npcs.json", npcs)
+
+
+def _seed_scene_cast(player, npc_ids, area=None):
+    """Pre-seed cast so role-target audits see every pinned NPC in present."""
+    from storage import save
+
+    area = area or player.get("area")
+    sub = (player.get("scene_subplace") or {}).get("id")
+    player["scene_cast"] = {
+        "area": area,
+        "subplace": sub,
+        "ids": [i for i in npc_ids if i],
+    }
+    save("player/player.json", player)
+
+
+def _solo_combat_cast(player, npcs, focus_id):
+    """Keep one NPC in the social cast so attack resolves without ambiguity."""
+    from storage import save
+
+    area = player.get("area")
+    if not area or not focus_id:
+        return
+    focus = npcs.get(focus_id, {})
+    _pin_npcs_to_area(player, npcs, [focus_id], area=area)
+    for npc in npcs.values():
+        if npc.get("status") != "alive" or npc.get("id") == focus_id:
+            continue
+        if npc.get("area") == area:
+            sched = npc.get("schedule") or {}
+            npc["area"] = sched.get("home_area") or npc.get("area")
+            npc.pop("travel_state", None)
+    save("characters/npcs.json", npcs)
+    _seed_scene_cast(player, [focus_id], area=area)
+
+
 def _reset_player_baseline():
     from storage import load, save
+    player = load("player/player.json", {})
+    npcs = load("characters/npcs.json", {})
+    _cleanup_audit_fixtures(npcs, player)
+    npcs = load("characters/npcs.json", {})
     player = load("player/player.json", {})
     if not player:
         raise RuntimeError("No player save — bootstrap or create character first.")
@@ -159,7 +216,10 @@ def _ensure_present_npcs(player, npcs, minimum=1):
         return
     from storage import save
     needed = minimum - len(here)
-    if needed > 0 and not any(n.get("status") == "alive" for n in npcs.values()):
+    if needed > 0 and not any(
+        n.get("status") == "alive" and not str(n.get("id", "")).startswith("audit_")
+        for n in npcs.values()
+    ):
         npcs["audit_stand_in"] = {
             "id": "audit_stand_in",
             "name": "Audit Stand-in",
@@ -168,6 +228,7 @@ def _ensure_present_npcs(player, npcs, minimum=1):
             "status": "alive",
             "area": area,
             "location": player.get("location"),
+            "schedule": {"home_area": area},
             "stats": {"health": 80, "max_health": 80, "stamina": 20, "max_stamina": 20},
             "traits": {},
             "physique": {"build": "wiry", "presentation": 50},
@@ -293,11 +354,18 @@ def audit_confession_witness():
     _run_sequence(["look around"])
     player = load("player/player.json", {})
     npcs = load("characters/npcs.json", {})
-    first = _focus_first_name(player, npcs)
-    _assert(first, "need scene_focus after explore")
-    CAPTURED.clear()
-    _run_sequence([f"attack {first}", "I have killed him"])
+    focus_id = player.get("scene_focus")
+    _assert(focus_id, "need scene_focus after explore")
+    focus_npc = npcs.get(focus_id, {})
+    attack_label = (focus_npc.get("name") or "").strip() or _focus_first_name(player, npcs)
+    _assert(attack_label, "need attack target name")
+    _solo_combat_cast(player, npcs, focus_id)
     player = load("player/player.json", {})
+    CAPTURED.clear()
+    _run_sequence([f"attack {attack_label}", "I have killed him"])
+    player = load("player/player.json", {})
+    if player.get("pending_target_clarification"):
+        raise AuditSkip("ambiguous attack target")
     _assert(player.get("last_combat_target"), "combat should set last_combat_target")
     confess = _last_capture("I have killed him")
     _assert(confess, "missing confess capture")
@@ -309,9 +377,21 @@ def audit_confession_witness():
 
 def audit_find_person_role():
     """Role-specific find must match role, ask for clarification, or fail — not scene_focus fallback."""
-    from storage import load
+    from storage import load, save
 
     _reset_player_baseline()
+    player = load("player/player.json", {})
+    npcs = load("characters/npcs.json", {})
+    area = player.get("area")
+    priest_id, soldier_id = _ensure_audit_role_pair(player, npcs, area=area)
+    focus_id = soldier_id
+    if focus_id:
+        player["scene_focus"] = focus_id
+        player.setdefault("known_npcs", {}).setdefault(focus_id, {})["name_known"] = True
+    _pin_npcs_to_area(player, npcs, [priest_id] + ([focus_id] if focus_id else []), area=area)
+    _seed_scene_cast(player, [priest_id] + ([focus_id] if focus_id else [priest_id]), area=area)
+    save("player/player.json", player)
+
     _run_sequence(["look around", "find the priest"])
     player = load("player/player.json", {})
     pending = player.get("pending_target_clarification")
@@ -373,28 +453,21 @@ def audit_talk_priest_overrides_focus():
     player = _reset_player_baseline()
     npcs = load("characters/npcs.json", {})
     area = player.get("area")
-    present_roles = {}
-    for nid, npc in npcs.items():
-        if npc.get("area") == area and npc.get("status") == "alive":
-            present_roles[nid] = npc.get("role")
-
-    priest_ids = [nid for nid, role in present_roles.items() if role == "priest"]
-    if not priest_ids:
-        raise AuditSkip("no priest in area")
-
-    soldier_ids = [nid for nid, role in present_roles.items() if role in ("soldier", "guard", "mercenary")]
-    focus_id = soldier_ids[0] if soldier_ids else list(present_roles.keys())[0]
+    priest_id, focus_id = _ensure_audit_role_pair(player, npcs, area=area)
+    _pin_npcs_to_area(player, npcs, [focus_id, priest_id], area=area)
     from storage import save
     player["scene_focus"] = focus_id
     player.setdefault("known_npcs", {}).setdefault(focus_id, {})["name_known"] = True
+    _seed_scene_cast(player, [focus_id, priest_id], area=area)
     save("player/player.json", player)
 
     _run_sequence(["look around", "Talk to the priest"])
     last = CAPTURED[-1]
     _assert(last["kind"] == "talk", f"expected talk, got {last['kind']}")
-    if last.get("target_id"):
-        role = npcs.get(last["target_id"], {}).get("role")
-        _assert(role == "priest", f"talk to priest should target priest, got role={role!r}")
+    _assert(
+        last.get("target_id") == priest_id,
+        f"talk to priest should target priest, got target_id={last.get('target_id')!r}",
+    )
 
 
 def audit_withdraw_clears_focus():
@@ -492,11 +565,60 @@ def _inject_audit_scholars(player, npcs):
 
 
 _AUDIT_SCHOLAR_IDS = ("audit_scholar_a", "audit_scholar_b")
-_AUDIT_FIXTURE_IDS = _AUDIT_SCHOLAR_IDS + ("audit_priest_reloc",)
+_AUDIT_ROLE_FIXTURE_IDS = ("audit_priest_fixture", "audit_soldier_fixture")
+_AUDIT_FIXTURE_IDS = (
+    _AUDIT_SCHOLAR_IDS
+    + _AUDIT_ROLE_FIXTURE_IDS
+    + ("audit_priest_reloc", "audit_stand_in")
+)
 
 
-def _cleanup_audit_scholars(npcs, player=None):
-    """Remove injected audit NPCs and any player references to them."""
+def _ensure_audit_role_pair(player, npcs, area=None):
+    """Inject priest + soldier fixtures when the live world lacks them."""
+    from storage import save
+
+    area = area or player.get("area")
+    loc = player.get("location")
+    priest_id = "audit_priest_fixture"
+    soldier_id = "audit_soldier_fixture"
+    base = {
+        "status": "alive",
+        "area": area,
+        "location": loc,
+        "schedule": {"home_area": area},
+        "stats": {"health": 80, "max_health": 80, "stamina": 20, "max_stamina": 20},
+        "traits": {},
+        "physique": {"presentation": 50},
+    }
+    if priest_id not in npcs:
+        npcs[priest_id] = {
+            **base,
+            "id": priest_id,
+            "name": "Audit Priest",
+            "role": "priest",
+            "gender": "male",
+        }
+    if soldier_id not in npcs:
+        npcs[soldier_id] = {
+            **base,
+            "id": soldier_id,
+            "name": "Audit Soldier",
+            "role": "soldier",
+            "gender": "male",
+        }
+    for nid in (priest_id, soldier_id):
+        npc = npcs[nid]
+        npc["status"] = "alive"
+        npc["area"] = area
+        if loc:
+            npc["location"] = loc
+        npc.setdefault("schedule", {})["home_area"] = area
+    save("characters/npcs.json", npcs)
+    return priest_id, soldier_id
+
+
+def _cleanup_audit_fixtures(npcs, player=None):
+    """Remove injected audit NPCs and any save references to them."""
     from storage import load, save
 
     if player is None:
@@ -512,6 +634,24 @@ def _cleanup_audit_scholars(npcs, player=None):
     if player.get("scene_focus") in _AUDIT_FIXTURE_IDS:
         player["scene_focus"] = None
         changed_player = True
+    if player.get("last_combat_target") in _AUDIT_FIXTURE_IDS:
+        player["last_combat_target"] = None
+        changed_player = True
+
+    known = player.get("known_npcs") or {}
+    for key in _AUDIT_FIXTURE_IDS:
+        if key in known:
+            del known[key]
+            changed_player = True
+
+    cast = player.get("scene_cast") or {}
+    cast_ids = [i for i in (cast.get("ids") or []) if i not in _AUDIT_FIXTURE_IDS]
+    if cast_ids != (cast.get("ids") or []):
+        if cast_ids:
+            player["scene_cast"] = {**cast, "ids": cast_ids}
+        else:
+            player.pop("scene_cast", None)
+        changed_player = True
 
     journal = player.get("journal") or []
     filtered = [
@@ -522,15 +662,57 @@ def _cleanup_audit_scholars(npcs, player=None):
         player["journal"] = filtered
         changed_player = True
 
+    pending = player.get("pending_target_clarification") or {}
+    opts = pending.get("options") or []
+    clean_opts = [o for o in opts if o.get("id") not in _AUDIT_FIXTURE_IDS]
+    if clean_opts != opts:
+        if clean_opts:
+            pending["options"] = clean_opts
+            player["pending_target_clarification"] = pending
+        else:
+            player.pop("pending_target_clarification", None)
+        changed_player = True
+
     for key in ("boundary_history", "last_boundary_trace", "boundary_session"):
         if key in player:
             del player[key]
             changed_player = True
 
+    relationships = load("characters/relationships.json", {})
+    changed_rels = False
+    for key in list(relationships.keys()):
+        if key in _AUDIT_FIXTURE_IDS:
+            del relationships[key]
+            changed_rels = True
+            continue
+        rel = relationships.get(key) or {}
+        nested = rel.get("relationships") or rel
+        if isinstance(nested, dict):
+            for fid in _AUDIT_FIXTURE_IDS:
+                if fid in nested:
+                    del nested[fid]
+                    changed_rels = True
+
+    memories = load("characters/npc_memories.json", {})
+    changed_mem = False
+    for key in _AUDIT_FIXTURE_IDS:
+        if key in memories:
+            del memories[key]
+            changed_mem = True
+
     if changed_npcs:
         save("characters/npcs.json", npcs)
     if changed_player:
         save("player/player.json", player)
+    if changed_rels:
+        save("characters/relationships.json", relationships)
+    if changed_mem:
+        save("characters/npc_memories.json", memories)
+
+
+def _cleanup_audit_scholars(npcs, player=None):
+    """Backward-compatible alias for scholar/audit fixture cleanup."""
+    _cleanup_audit_fixtures(npcs, player)
 
 
 def audit_same_role_scholar_focus():
@@ -696,7 +878,7 @@ def main():
                 print(f"FAIL  {name}: {e}")
     finally:
         from storage import load
-        _cleanup_audit_scholars(
+        _cleanup_audit_fixtures(
             load("characters/npcs.json", {}),
             load("player/player.json", {}),
         )

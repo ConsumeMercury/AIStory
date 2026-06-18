@@ -155,6 +155,7 @@ def resolve_action_target(action, player, present, npcs=None, kind="general"):
 
     npcs = npcs or {}
     text = (action or "").lower()
+    has_role_hint = action_mentions_role_or_descriptor(action, present=present)
 
     if npcs:
         named = find_npc_by_name_in_text(action, npcs, player)
@@ -220,13 +221,12 @@ def resolve_action_target(action, player, present, npcs=None, kind="general"):
             return n
 
     focus_id = player.get("scene_focus")
-    has_role_hint = action_mentions_role_or_descriptor(action, present=present)
     if focus_id and not has_role_hint:
         for n in present:
             if n["id"] == focus_id:
                 return n
 
-    if kind in TARGET_KINDS and len(present) == 1:
+    if kind in TARGET_KINDS and len(present) == 1 and not has_role_hint:
         return present[0]
 
     if not has_role_hint:

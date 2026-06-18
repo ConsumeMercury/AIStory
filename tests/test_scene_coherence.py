@@ -55,6 +55,27 @@ def test_role_hint_blocks_focus_fallback():
     assert target["id"] == "soldier"
 
 
+def test_role_hint_blocks_single_present_fallback():
+    soldier = _npc("soldier", role="soldier", name="Solia")
+    player = {"scene_focus": "soldier", "known_npcs": {"soldier": {"name_known": True}}}
+    target = resolve_action_target(
+        "Talk to the priest",
+        player,
+        [soldier],
+        kind="talk",
+    )
+    assert target is None
+
+
+def test_find_priest_does_not_fallback_to_scene_focus():
+    soldier = _npc("soldier", role="soldier", name="Solia")
+    player = {"scene_focus": "soldier", "known_npcs": {}}
+    from simulation.action_resolution import resolve_find_person
+
+    found = resolve_find_person("find the priest", player, [soldier], {})
+    assert found is None
+
+
 def test_local_movement_sets_subplace():
     player = {"area": "city:temple_row", "story_flags": {}}
     sub, msg = resolve_local_movement("Go to the heavy oak door", player, "city:temple_row")
