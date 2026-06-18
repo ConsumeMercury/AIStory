@@ -94,6 +94,25 @@ def test_subjective_memory_is_first_person_for_target(tmp_path, monkeypatch):
     assert "saw the outsider" in mems["witness"][0]["summary"]
 
 
+def test_subjective_memory_is_humanized_not_raw_command(tmp_path, monkeypatch):
+    monkeypatch.setattr(storage, "BASE_DIR", str(tmp_path))
+    (tmp_path / "characters").mkdir(parents=True, exist_ok=True)
+    record_player_action(
+        ["target"],
+        "socialise",
+        "Talk to the woman",
+        "city:market",
+        tick=8,
+        day=1,
+        target_id="target",
+        kind="talk",
+    )
+    mems = storage.load("characters/npc_memories.json", {})
+    summary = mems["target"][0]["summary"]
+    assert "Talk to the woman" not in summary
+    assert "approached" in summary.lower()
+
+
 def test_memory_callback_surfaces_on_return():
     from simulation.memory_immersion import pick_memory_callback
 

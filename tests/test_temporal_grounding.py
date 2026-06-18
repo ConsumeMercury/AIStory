@@ -191,7 +191,7 @@ def test_coal_chute_location_does_not_trigger_schedule_promise():
 
 
 def test_wait_until_dawn_updates_time_of_day():
-    from simulation.world_clock import advance_clock, _recompute
+    from simulation.world_clock import _recompute
 
     world = {"hour_count": 99, "hour": 3, "time_of_day": "deep night", "day": 5}
     save_backup = world.copy()
@@ -201,3 +201,14 @@ def test_wait_until_dawn_updates_time_of_day():
     _recompute(world)
     assert world["hour"] == 5
     assert world["time_of_day"] == "dawn"
+
+
+def test_stale_time_of_day_repaired_on_assemble():
+    from simulation.scene_state import assemble_scene_state
+
+    player = {"area": "hq", "known_npcs": {}, "scheduled_events": {}}
+    npcs = {"a": {"id": "a", "status": "alive", "area": "hq"}}
+    world = {"hour_count": 1, "hour": 1, "day": 1, "time_of_day": "day"}
+    state = assemble_scene_state(player, npcs, world, {}, tick=1, persist=False)
+    assert state.time_of_day == "deep night"
+    assert world["time_of_day"] == "deep night"

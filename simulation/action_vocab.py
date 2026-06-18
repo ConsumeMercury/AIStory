@@ -6,7 +6,8 @@ VALID_ACTION_KINDS = frozenset({
     "ask_name", "talk", "personal_talk", "threaten", "show_respect", "blackmail",
     "accuse", "ask_about", "wait", "hunt", "approach", "guild", "investigate",
     "confess", "search", "find", "attack", "travel", "explore", "give", "help",
-    "examine", "observe", "rest", "insult", "steal", "trade", "withdraw", "general",
+    "examine", "observe", "rest", "insult", "steal", "trade", "withdraw", "deceive",
+    "general",
 })
 
 # Regex fast-path — skip LLM when kind is unambiguous and target/speech are resolved.
@@ -21,6 +22,7 @@ HIGH_STAKES_KINDS = frozenset({"attack", "trade", "give", "steal"})
 SPEECH_KINDS = frozenset({
     "talk", "ask_about", "ask_name", "personal_talk", "confess", "threaten",
     "insult", "show_respect", "accuse", "blackmail", "help", "give", "trade",
+    "deceive",
 })
 
 

@@ -34,6 +34,9 @@ def _nothing_changed(action_context):
         ctx.get("approach_failed")
         or ctx.get("travel_failed")
         or ctx.get("target_ambiguous")
+        or ctx.get("interpretation_clarify")
+        or ctx.get("duplicate_action")
+        or ctx.get("clarification_reprompt")
         or ctx.get("wait_no_change")
     )
 
@@ -101,8 +104,11 @@ STRUCTURE_DIRECTIVES = {
         "the stall, or the focal person's appearance. Open on dialogue or the next beat of action."
     ),
     "arrival": (
-        "PROSE STRUCTURE — FIRST ARRIVAL:\n"
-        "One paragraph of place — sight plus one other sense. Then stop before conversation."
+        "PROSE STRUCTURE — OPENING ARRIVAL:\n"
+        "Use the full 3–4 paragraph length. Teach the player the environment: spatial layout, "
+        "who belongs here, what this place is for, one live tension, and one implicit hook "
+        "for what they might do next. Spread at least two senses beyond sight across the scene. "
+        "No dialogue exchange yet."
     ),
     "action": (
         "PROSE STRUCTURE — ACTION:\n"

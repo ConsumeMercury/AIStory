@@ -110,6 +110,8 @@ def _continuation_focal_npc(present, player, action_ctx):
     """Keep the same conversation partner when the action does not retarget."""
     if action_ctx.get("target_id") or action_ctx.get("target_ambiguous"):
         return None
+    if action_ctx.get("interpretation_clarify") or player.get("pending_target_clarification"):
+        return None
     kind = action_ctx.get("kind", "general")
     if kind not in CONTINUATION_KINDS:
         return None
@@ -288,6 +290,43 @@ def select_scene_cast(present, player, action_ctx, max_focus=1):
             "No other individuals worth distinguishing this scene."
         )
         return [continued], crowd, continued["id"]
+
+    action_text = action_ctx.get("action_summary") or ""
+    from simulation.target_constraints import TargetStatus, resolve_target
+    from simulation.target_resolution import action_mentions_target_constraint
+
+    has_constraint = action_mentions_target_constraint(action_text, present=present)
+    if has_constraint or action_ctx.get("target_constraint_failed"):
+        result = resolve_target(
+            action_text, player, present, kind=action_ctx.get("kind", "general"),
+        )
+        if result.status == TargetStatus.ABSENT:
+            action_ctx["target_constraint_failed"] = True
+            action_ctx["target_id"] = None
+            return [], (
+                "NO MATCH — the protagonist named someone not here "
+                "(wrong role, gender, or description). Do NOT invent dialogue from a substitute. "
+                "Show the failed attempt: looking, calling, silence, or being ignored."
+            ), None
+        if result.status == TargetStatus.AMBIGUOUS:
+            action_ctx["target_id"] = None
+            action_ctx["target_ambiguous"] = True
+            return [], (
+                "TARGET UNCLEAR — several people fit what the player said. "
+                "Do NOT pick one arbitrarily; wait for clarification."
+            ), None
+        if result.status == TargetStatus.MATCHED and result.npc:
+            fid = result.npc_id
+            action_ctx["target_id"] = fid
+            others = len(present) - 1
+            crowd = (
+                f"{others} other people are nearby as background only — "
+                "do NOT describe them, name them, or give them gestures or dialogue. "
+                "They are faceless crowd noise."
+                if others > 0 else
+                "No other individuals worth distinguishing this scene."
+            )
+            return [result.npc], crowd, fid
 
     ranked = sorted(present, key=lambda n: _score_npc(n, player, action_ctx, known, institutions), reverse=True)
     focus = ranked[:max_focus]

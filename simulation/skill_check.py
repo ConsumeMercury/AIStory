@@ -38,6 +38,7 @@ ACTION_DC = {
     "ask_about": ("empathy", 12),
     "accuse": ("intimidation", 14),
     "blackmail": ("deception", 14),
+    "deceive": ("deception", 13),
     "wait": ("survival", 10),
     "hunt": ("survival", 12),
     "guild": ("persuasion", 11),

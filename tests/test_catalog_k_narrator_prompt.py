@@ -9,9 +9,11 @@ from tests.fixtures.catalog_fixtures import npc, player
 
 
 def test_token_budgets_by_kind():
-    assert token_budget_for_kind("attack") == 3200
-    assert token_budget_for_kind("talk") == 1400
-    assert token_budget_for_kind("ask_name") == 700
+    assert token_budget_for_kind("attack") == 2600
+    assert token_budget_for_kind("talk") == 1100
+    assert token_budget_for_kind("ask_name") == 550
+    assert token_budget_for_kind("explore", opening=True) == 2400
+    assert token_budget_for_kind("explore", opening=False) == 1800
 
 
 def test_narrator_blocks_gated_by_kind():

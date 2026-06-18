@@ -115,6 +115,26 @@ def cmd_boundary():
     validator_chain = (last_trace or {}).get("validator_chain") or []
     if validator_chain:
         payload["validator_chain"] = validator_chain
+    clarification = (last_trace or {}).get("clarification") or {}
+    if clarification:
+        payload["clarification"] = {
+            "target_ambiguous": clarification.get("target_ambiguous"),
+            "interpretation_clarify": clarification.get("interpretation_clarify"),
+            "clarify_reason": clarification.get("clarify_reason"),
+            "reprompt": clarification.get("reprompt"),
+            "pending_reason": (clarification.get("pending") or {}).get("reason"),
+            "pending_fail_count": (clarification.get("pending") or {}).get("fail_count"),
+        }
+    interp = (last_trace or {}).get("interpretation") or {}
+    if interp:
+        payload["interpretation_summary"] = {
+            "kind": (interp.get("kind") or {}).get("value"),
+            "target": (interp.get("target") or {}).get("value"),
+            "topic": (interp.get("topic") or {}).get("value"),
+            "clarify": interp.get("clarify"),
+            "inventory_missing": interp.get("inventory_missing"),
+            "duplicate_action": interp.get("duplicate_action"),
+        }
     _print_json(payload)
 
 

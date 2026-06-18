@@ -61,6 +61,7 @@ _PATTERNS = [
     (re.compile(r"\b(give|offer|pay|hand over|gift|donate)\b", re.I), "give"),
     (re.compile(r"\b(help|assist|aid|bandage|heal|save|protect|rescue)\b", re.I), "help"),
     (re.compile(r"\b(threaten|threathen|intimidate|menace|scare)\b", re.I), "threaten"),
+    (re.compile(r"\b(?:lie|pretend|deceive|bluff)\b", re.I), "deceive"),
     (re.compile(r"\b(insult|mock|taunt|spit at|belittle)\b", re.I), "insult"),
     (re.compile(r"\b(steal|pickpocket|snatch|take from)\b", re.I), "steal"),
     (re.compile(r"\b(buy|purchase|trade for|barter|haggle)\b", re.I), "trade"),
@@ -267,28 +268,52 @@ def _target_hint(action, present_npcs, player, npcs=None, kind="general"):
 
 
 def interpret_action(action, player, present_npcs, world, npcs=None, scene_state=None):
-    kind = "general"
-    for pattern, k in _PATTERNS:
-        if pattern.search(action):
-            kind = k
-            break
+    from simulation.action_interpretation import (
+        apply_preinterpretation_to_ctx,
+        kind_blocked,
+        preprocess_action,
+    )
+
+    preprocess = preprocess_action(action)
+    parse_text = preprocess.primary_clause or preprocess.action or action
+
+    kind = preprocess.kind_override or "general"
+    if not preprocess.kind_override:
+        kind = "general"
+        for pattern, k in _PATTERNS:
+            if kind_blocked(k, preprocess):
+                continue
+            if pattern.search(parse_text):
+                kind = k
+                break
 
     intents = []
     for name, pat in _INTENT_WORDS.items():
-        if pat.search(action):
+        if pat.search(parse_text):
             intents.append(name)
     if not intents:
         intents = ["neutral"]
 
-    target = _target_hint(action, present_npcs, player, npcs=npcs, kind=kind)
+    target = None
+    target_result = None
+    if not preprocess.self_target and not preprocess.object_ref and not preprocess.place_ref:
+        from simulation.target_constraints import resolve_target
+        target_result = resolve_target(
+            parse_text, player, present_npcs, npcs=npcs, kind=kind,
+        )
+        if target_result.matched:
+            target = target_result.npc
     target_descriptor = short_descriptor(target) if target else None
-    speech = extract_player_speech(action, player, kind=kind)
+    speech = extract_player_speech(parse_text, player, kind=kind)
     if kind == "general" and speech and speech.lower().startswith("my name is"):
         kind = "talk"
 
     from simulation.local_places import looks_like_local_movement
-    if kind == "travel" and looks_like_local_movement(action):
+    if kind == "travel" and looks_like_local_movement(parse_text):
         kind = "approach"
+
+    if preprocess.kind_override and preprocess.kind_override not in preprocess.blocked_kinds:
+        kind = preprocess.kind_override
 
     time_of_day = world.get("time_of_day", "day")
     weather = world.get("weather", "Clear")
@@ -304,10 +329,18 @@ def interpret_action(action, player, present_npcs, world, npcs=None, scene_state
         "skill_xp": None,
         "stamina_delta": 0,
         "story_directive": "",
-        "action_summary": action.strip()[:200],
+        "action_summary": (preprocess.action or action).strip()[:200],
     }
 
-    if kind == "explore":
+    skip_kind_directives = (
+        preprocess.self_target
+        or preprocess.object_ref
+        or preprocess.place_ref
+        or preprocess.empty_input
+        or preprocess.needs_clarify()
+    )
+
+    if not skip_kind_directives and kind == "explore":
         ctx["stamina_delta"] = -2
         ctx["skill_xp"] = ("navigation", 4)
         ctx["story_directive"] = (
@@ -318,7 +351,7 @@ def interpret_action(action, player, present_npcs, world, npcs=None, scene_state
             f"End before the scene resolves."
         )
 
-    elif kind == "talk":
+    elif not skip_kind_directives and kind == "talk":
         ctx["memory_tag"] = "socialise"
         ctx["relationship"] = ("charm", 0.6)
         ctx["skill_xp"] = ("persuasion", 6)
@@ -338,7 +371,7 @@ def interpret_action(action, player, present_npcs, world, npcs=None, scene_state
                 f"No invented lines for the protagonist."
             )
 
-    elif kind == "personal_talk":
+    elif not skip_kind_directives and kind == "personal_talk":
         ctx["relationship"] = ("charm", 0.5)
         ctx["skill_xp"] = ("empathy", 8)
         ctx["story_directive"] = (
@@ -348,7 +381,7 @@ def interpret_action(action, player, present_npcs, world, npcs=None, scene_state
             f"One person only. Dialogue may run slightly longer here (3-4 lines total) but stay literary."
         )
 
-    elif kind == "ask_name":
+    elif not skip_kind_directives and kind == "ask_name":
         ctx["relationship"] = ("charm", 0.35)
         ctx["skill_xp"] = ("empathy", 6)
         speech = speech_for_ask_name(action)
@@ -362,35 +395,35 @@ def interpret_action(action, player, present_npcs, world, npcs=None, scene_state
             "No new mysteries or crowd scenes."
         )
 
-    elif kind == "attack":
+    elif not skip_kind_directives and kind == "attack":
         ctx["memory_tag"] = "attack"
         ctx["relationship"] = ("violence", 1.5)
         ctx["skill_xp"] = ("brawling", 14)
         ctx["stamina_delta"] = -8
         ctx["story_directive"] = "Violence. Physical, costly, ugly. One opponent in focus."
 
-    elif kind == "help":
+    elif not skip_kind_directives and kind == "help":
         ctx["memory_tag"] = "help"
         ctx["relationship"] = ("kindness", 1.0)
         ctx["skill_xp"] = ("empathy", 8)
         ctx["story_directive"] = "An offer of help — wanted or not. Show hands, hesitation, consequence."
 
-    elif kind == "examine":
+    elif not skip_kind_directives and kind == "examine":
         ctx["memory_tag"] = "observation"
         ctx["skill_xp"] = ("appraisal", 5)
         ctx["story_directive"] = "Close looking. What you notice. What you miss. No lecture."
 
-    elif kind == "observe":
+    elif not skip_kind_directives and kind == "observe":
         ctx["memory_tag"] = "observation"
         ctx["skill_xp"] = ("empathy", 4)
         ctx["story_directive"] = "Watching without being seen. Overheard half-phrases, not staged scenes."
 
-    elif kind == "rest":
+    elif not skip_kind_directives and kind == "rest":
         ctx["memory_tag"] = "rest"
         ctx["stamina_delta"] = 12
         ctx["story_directive"] = f"Pause. Body and weather. {weather} at {time_of_day}."
 
-    elif kind == "threaten":
+    elif not skip_kind_directives and kind == "threaten":
         ctx["memory_tag"] = "threat"
         ctx["relationship"] = ("threat", 1.25)
         ctx["skill_xp"] = ("intimidation", 10)
@@ -400,7 +433,7 @@ def interpret_action(action, player, present_npcs, world, npcs=None, scene_state
             f"Show the line, the stillness after, whether fear or defiance answers."
         )
 
-    elif kind == "insult":
+    elif not skip_kind_directives and kind == "insult":
         ctx["memory_tag"] = "insult"
         ctx["relationship"] = ("insult", 0.95)
         ctx["skill_xp"] = ("intimidation", 6)
@@ -410,7 +443,7 @@ def interpret_action(action, player, present_npcs, world, npcs=None, scene_state
             f"Words land or miss — consequence in a look, not a lecture."
         )
 
-    elif kind == "steal":
+    elif not skip_kind_directives and kind == "steal":
         ctx["memory_tag"] = "theft"
         ctx["relationship"] = ("betrayal", 1.0)
         ctx["skill_xp"] = ("lockpicking", 12)
@@ -420,7 +453,7 @@ def interpret_action(action, player, present_npcs, world, npcs=None, scene_state
             "One person in focus if anyone notices."
         )
 
-    elif kind == "give":
+    elif not skip_kind_directives and kind == "give":
         ctx["memory_tag"] = "gift"
         ctx["relationship"] = ("kindness", 0.9)
         ctx["skill_xp"] = ("persuasion", 5)
@@ -430,7 +463,7 @@ def interpret_action(action, player, present_npcs, world, npcs=None, scene_state
             f"coin, food, or something carried. Show what it costs the giver."
         )
 
-    elif kind == "trade":
+    elif not skip_kind_directives and kind == "trade":
         ctx["memory_tag"] = "trade"
         ctx["relationship"] = ("charm", 0.4)
         ctx["skill_xp"] = ("haggling", 8)
@@ -440,14 +473,14 @@ def interpret_action(action, player, present_npcs, world, npcs=None, scene_state
             f"Goods and coin are real stakes — tension in small numbers and glances."
         )
 
-    elif kind == "withdraw":
+    elif not skip_kind_directives and kind == "withdraw":
         ctx["memory_tag"] = "withdrawal"
         ctx["story_directive"] = (
             "The protagonist disengages — turns away, ends the moment. "
             "Show what is left unsaid in the other person's posture."
         )
 
-    elif kind == "show_respect":
+    elif not skip_kind_directives and kind == "show_respect":
         ctx["memory_tag"] = "socialise"
         ctx["relationship"] = ("respect", 1.0)
         ctx["skill_xp"] = ("persuasion", 5)
@@ -458,7 +491,7 @@ def interpret_action(action, player, present_npcs, world, npcs=None, scene_state
             f"The other person should react in line with their personality."
         )
 
-    elif kind == "find":
+    elif not skip_kind_directives and kind == "find":
         ctx["memory_tag"] = "socialise"
         ctx["relationship"] = ("charm", 0.35)
         ctx["skill_xp"] = ("persuasion", 4)
@@ -468,7 +501,7 @@ def interpret_action(action, player, present_npcs, world, npcs=None, scene_state
             "If not present, show the search failing — no invented meeting."
         )
 
-    elif kind == "search":
+    elif not skip_kind_directives and kind == "search":
         ctx["memory_tag"] = "observation"
         ctx["skill_xp"] = ("appraisal", 6)
         ctx["stamina_delta"] = -1
@@ -477,7 +510,7 @@ def interpret_action(action, player, present_npcs, world, npcs=None, scene_state
             "Outcome is fixed by simulation; describe only what they actually find."
         )
 
-    elif kind == "confess":
+    elif not skip_kind_directives and kind == "confess":
         ctx["memory_tag"] = "socialise"
         ctx["relationship"] = ("threat", 0.8)
         ctx["skill_xp"] = ("persuasion", 4)
@@ -489,7 +522,7 @@ def interpret_action(action, player, present_npcs, world, npcs=None, scene_state
             "One to three lines of reply, then stop."
         )
 
-    elif kind == "approach":
+    elif not skip_kind_directives and kind == "approach":
         ctx["memory_tag"] = "observation"
         ctx["skill_xp"] = ("navigation", 3)
         ctx["stamina_delta"] = -1
@@ -500,7 +533,7 @@ def interpret_action(action, player, present_npcs, world, npcs=None, scene_state
             "Do NOT invent items, documents, or NPC dialogue unless SCENE FACTS provide them."
         )
 
-    elif kind == "travel":
+    elif not skip_kind_directives and kind == "travel":
         ctx["skill_xp"] = ("navigation", 8)
         ctx["stamina_delta"] = -5
         ctx["story_directive"] = (
@@ -508,7 +541,7 @@ def interpret_action(action, player, present_npcs, world, npcs=None, scene_state
             "Arrival, not a travelogue of every mile."
         )
 
-    elif kind == "investigate":
+    elif not skip_kind_directives and kind == "investigate":
         ctx["memory_tag"] = "observation"
         ctx["skill_xp"] = ("appraisal", 8)
         ctx["story_directive"] = (
@@ -517,7 +550,7 @@ def interpret_action(action, player, present_npcs, world, npcs=None, scene_state
             "No focal NPC dialogue; clues are found, not told."
         )
 
-    elif kind == "ask_about":
+    elif not skip_kind_directives and kind == "ask_about":
         ctx["memory_tag"] = "socialise"
         ctx["relationship"] = ("charm", 0.4)
         ctx["skill_xp"] = ("empathy", 7)
@@ -530,7 +563,7 @@ def interpret_action(action, player, present_npcs, world, npcs=None, scene_state
             + ". Answers may lie, deflect, or trade truth for trust."
         )
 
-    elif kind == "accuse":
+    elif not skip_kind_directives and kind == "accuse":
         ctx["memory_tag"] = "threat"
         ctx["relationship"] = ("insult", 1.1)
         ctx["skill_xp"] = ("intimidation", 10)
@@ -540,7 +573,17 @@ def interpret_action(action, player, present_npcs, world, npcs=None, scene_state
             f"Denial, rage, or guilty silence — consequences immediate."
         )
 
-    elif kind == "blackmail":
+    elif not skip_kind_directives and kind == "deceive":
+        ctx["memory_tag"] = "socialise"
+        ctx["relationship"] = ("deception", 0.8)
+        ctx["skill_xp"] = ("deception", 10)
+        ctx["story_directive"] = (
+            f"The protagonist tells a deliberate lie"
+            f"{' to ' + target_descriptor if target_descriptor else ''}. "
+            f"Show the attempt — belief, doubt, or exposure. Not plain honest speech."
+        )
+
+    elif not skip_kind_directives and kind == "blackmail":
         ctx["memory_tag"] = "threat"
         ctx["relationship"] = ("threat", 1.3)
         ctx["skill_xp"] = ("deception", 12)
@@ -550,7 +593,7 @@ def interpret_action(action, player, present_npcs, world, npcs=None, scene_state
             f"Ugly power — show what it costs both sides."
         )
 
-    elif kind == "wait":
+    elif not skip_kind_directives and kind == "wait":
         ctx["memory_tag"] = "observation"
         ctx["skill_xp"] = ("survival", 4)
         ctx["story_directive"] = (
@@ -558,7 +601,7 @@ def interpret_action(action, player, present_npcs, world, npcs=None, scene_state
             "Patience, boredom, a routine revealed or a meeting missed."
         )
 
-    elif kind == "hunt":
+    elif not skip_kind_directives and kind == "hunt":
         ctx["memory_tag"] = "hunt"
         ctx["skill_xp"] = ("archery", 10)
         ctx["stamina_delta"] = -4
@@ -568,7 +611,7 @@ def interpret_action(action, player, present_npcs, world, npcs=None, scene_state
             "End with the hunter's choice: attack, withdraw, or keep stalking."
         )
 
-    elif kind == "guild":
+    elif not skip_kind_directives and kind == "guild":
         ctx["memory_tag"] = "socialise"
         ctx["relationship"] = ("charm", 0.5)
         ctx["skill_xp"] = ("haggling", 8)
@@ -578,20 +621,51 @@ def interpret_action(action, player, present_npcs, world, npcs=None, scene_state
             "contracts, bounties, rank, or refusal. Dialogue-heavy; end on their offer or demand."
         )
 
-    else:
+    elif not skip_kind_directives:
         ctx["skill_xp"] = ("empathy", 3)
         ctx["story_directive"] = (
-            f"The protagonist: {action}. Render as fiction — physical action and consequence, "
+            f"The protagonist: {parse_text}. Render as fiction — physical action and consequence, "
             f"not a game log. One person in focus if anyone is involved."
         )
 
-    if "careful" in intents:
+    if not skip_kind_directives and "careful" in intents:
         ctx["story_directive"] += " They move carefully."
-    if "urgent" in intents:
+    if not skip_kind_directives and "urgent" in intents:
         ctx["story_directive"] += " Urgency tightens the prose."
+
+    apply_preinterpretation_to_ctx(preprocess, ctx)
+
+    if target_result is not None:
+        from simulation.target_resolution import apply_resolved_target_to_ctx
+        apply_resolved_target_to_ctx(ctx, target_result)
+
+    from simulation.interpretation_signals import apply_interpretation_signals
+    apply_interpretation_signals(parse_text, player, ctx)
+
+    from simulation.action_interpretation import attach_economy_quantities
+    attach_economy_quantities(parse_text, player, ctx, npcs=npcs, present=present_npcs)
+
+    from simulation.topic_resolution import apply_topic_gates
+    apply_topic_gates(ctx, player, npcs or {}, present_npcs or [])
+
+    if present_npcs:
+        from simulation.target_constraints import extract_constraints
+        tc = extract_constraints(parse_text, player, present_npcs, npcs)
+        ctx["regex_constraints"] = {
+            "gender": tc.gender,
+            "role": tc.role,
+            "name_query": tc.name_query,
+            "physical": list(tc.physical or []),
+        }
 
     if scene_state is not None:
         from simulation.action_classifier import apply_classifier_to_ctx
-        apply_classifier_to_ctx(action, player, present_npcs, npcs, ctx, scene_state)
+        apply_classifier_to_ctx(parse_text, player, present_npcs, npcs, ctx, scene_state)
+
+    from simulation.interpretation_signals import build_intent_echo
+    ctx["intent_echo"] = build_intent_echo(ctx)
+
+    from simulation.action_interpretation import build_interpretation_trace
+    ctx["interpretation_trace"] = build_interpretation_trace(ctx)
 
     return ctx

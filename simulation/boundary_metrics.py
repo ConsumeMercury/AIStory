@@ -56,14 +56,16 @@ def summarize_fact_emission(facts):
     speaking = facts.get("speaking") or []
     death = facts.get("death") or []
     places = facts.get("places") or []
+    items = facts.get("items") or []
     schedules = facts.get("schedules") or []
-    tag_count = len(speaking) + len(death) + len(places) + len(schedules)
+    tag_count = len(speaking) + len(death) + len(places) + len(items) + len(schedules)
     return {
         "tag_count": tag_count,
         "has_facts": tag_count > 0,
         "speaking": list(speaking),
         "death": list(death),
         "places": list(places),
+        "items": list(items),
         "schedule_count": len(schedules),
         "schedules": [
             {"id": s.get("id"), "label": s.get("label"), "hours": s.get("hours_from_now")}
@@ -112,11 +114,33 @@ def build_classifier_diff(regex_ctx, validated):
             "regex": (rs or "")[:80],
             "classifier": cs[:80],
         })
+    regex_c = (regex_ctx or {}).get("regex_constraints") or {}
+    class_c = validated.get("constraints") or {}
+    for field in ("gender", "role", "name_query", "topic"):
+        rv = regex_c.get(field)
+        cv = class_c.get(field)
+        if field == "topic":
+            rv = rv or regex_ctx.get("ask_topic")
+            cv = cv or class_c.get("topic")
+        if cv and cv != rv:
+            diffs.append({
+                "field": f"constraints.{field}",
+                "regex": rv,
+                "classifier": cv,
+            })
+        elif cv and not rv:
+            diffs.append({
+                "field": f"constraints.{field}",
+                "regex": None,
+                "classifier": cv,
+            })
     return {
         "regex_kind": regex_ctx.get("kind"),
         "regex_target": regex_ctx.get("target_id"),
         "classifier_kind": validated.get("kind"),
         "classifier_target": validated.get("target_id"),
+        "regex_constraints": regex_c,
+        "classifier_constraints": class_c,
         "diffs": diffs,
         "disagrees": bool(diffs),
     }
@@ -277,7 +301,7 @@ def build_turn_boundary(action_ctx, output_boundary):
     return merged
 
 
-def update_session_boundary_stats(player, turn_boundary, tagged_issues=None):
+def update_session_boundary_stats(player, turn_boundary, tagged_issues=None, action_ctx=None):
     """Rolling session counters on player save for shadow-mode review."""
     if player is None or not turn_boundary:
         return
@@ -313,6 +337,17 @@ def update_session_boundary_stats(player, turn_boundary, tagged_issues=None):
         stats["auditor_mode"] = turn_boundary["auditor_mode"]
     if turn_boundary.get("schedule_untagged"):
         stats["schedule_untagged"] = stats.get("schedule_untagged", 0) + 1
+    ctx = action_ctx if isinstance(action_ctx, dict) else {}
+    if ctx.get("interpretation_clarify"):
+        stats["clarify_turns"] = stats.get("clarify_turns", 0) + 1
+    if ctx.get("target_ambiguous"):
+        stats["target_ambiguous_turns"] = stats.get("target_ambiguous_turns", 0) + 1
+    if ctx.get("inventory_missing"):
+        stats["inventory_missing_turns"] = stats.get("inventory_missing_turns", 0) + 1
+    if ctx.get("duplicate_action"):
+        stats["duplicate_action_turns"] = stats.get("duplicate_action_turns", 0) + 1
+    if ctx.get("clarification_reprompt"):
+        stats["clarification_reprompts"] = stats.get("clarification_reprompts", 0) + 1
     n_issues = turn_boundary.get("narrative_issue_count") or 0
     if n_issues:
         stats["narrative_issues"] = stats.get("narrative_issues", 0) + n_issues
@@ -439,6 +474,8 @@ def persist_boundary_trace(
             "disagrees": turn_boundary.get("classifier_disagrees"),
             "applied": turn_boundary.get("classifier_applied"),
             "diffs": turn_boundary.get("classifier_diffs") or bc.get("diffs") or [],
+            "regex_constraints": bc.get("regex_constraints") or (ctx.get("regex_constraints")),
+            "classifier_constraints": bc.get("classifier_constraints") or ctx.get("classifier_constraints"),
             "skip_reason": turn_boundary.get("classifier_skip_reason") or bc.get("skip_reason"),
             "error": turn_boundary.get("classifier_error") or bc.get("error"),
         },
@@ -473,6 +510,14 @@ def persist_boundary_trace(
         "orchestrator": ctx.get("story_orchestrator") or {},
         "prompt_profile": (ctx.get("prompt_profile") or {}) if isinstance(ctx.get("prompt_profile"), dict) else {},
         "validator_chain": list(ctx.get("validator_chain") or [])[:8],
+        "interpretation": (ctx.get("interpretation_trace") or {}),
+        "clarification": {
+            "target_ambiguous": bool(ctx.get("target_ambiguous")),
+            "interpretation_clarify": bool(ctx.get("interpretation_clarify")),
+            "clarify_reason": ctx.get("interpretation_clarify_reason"),
+            "reprompt": bool(ctx.get("clarification_reprompt")),
+            "pending": player.get("pending_target_clarification"),
+        },
     }
     player["last_boundary_trace"] = detail
     hist = player.setdefault("boundary_history", [])

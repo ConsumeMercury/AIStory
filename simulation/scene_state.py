@@ -8,6 +8,7 @@ from typing import Any
 from simulation.scene_coherence import place_label
 from simulation.scene_population import resolve_scene_present, persist_scene_cast
 from simulation.scheduled_events import list_pending_events
+from simulation.world_clock import ensure_clock_coherent
 
 
 def present_npcs_in_area(npcs, player):
@@ -74,6 +75,7 @@ def assemble_scene_state(
     Build the single authoritative scene snapshot for this beat.
     Resolves area population → persisted scene cast.
     """
+    ensure_clock_coherent(world, persist=False)
     ctx = action_ctx or {}
     area_present = present_npcs_in_area(npcs, player)
     cast = resolve_scene_present(area_present, player, ctx, npcs)
@@ -88,7 +90,7 @@ def assemble_scene_state(
         tick=tick,
         day=world.get("day", 1),
         hour=world.get("hour", 0),
-        time_of_day=world.get("time_of_day", "day"),
+        time_of_day=world.get("time_of_day") or "day",
         area_id=area_id,
         subplace_id=sub.get("id"),
         place_label=_place_label(player, areas_data or {}),

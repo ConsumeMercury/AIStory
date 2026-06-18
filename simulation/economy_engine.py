@@ -20,6 +20,36 @@ _ITEM_KEYWORDS = (
 )
 
 _GIVE_AMOUNT = re.compile(r"\b(\d+)\s*(?:coin|coins|silver|copper|gold)?\b", re.I)
+_WORD_NUMBERS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "a": 1, "an": 1, "couple": 2, "few": 3, "handful": 5,
+}
+
+
+def parse_give_amount(action, player):
+    """Authoritative coin amount the player intends to give (capped at wealth)."""
+    wealth = max(0, int(player.get("wealth") or 0))
+    if wealth <= 0:
+        return 0
+    text = action or ""
+    m = _GIVE_AMOUNT.search(text)
+    if m:
+        return min(wealth, int(m.group(1)))
+    wm = re.search(
+        r"\b(" + "|".join(_WORD_NUMBERS.keys()) + r")\s+(?:coin|coins|silver|copper|gold|pieces?)\b",
+        text,
+        re.I,
+    )
+    if wm:
+        return min(wealth, _WORD_NUMBERS.get(wm.group(1).lower(), 0))
+    if re.search(r"\bgive\s+all\b|\ball\s+(?:my\s+)?(?:money|coin|silver|gold)\b", text, re.I):
+        return wealth
+    if re.search(r"\bgive\b", text, re.I):
+        return wealth
+    return 0
+
+
 _BUY_VERBS = re.compile(r"\b(buy|purchase|trade for|barter for)\b", re.I)
 
 
@@ -87,19 +117,6 @@ def validate_trade(action, npc):
         return False, "They have nothing to sell.", None
 
     return True, "", None
-
-
-def parse_give_amount(action, player):
-    """Authoritative coin amount the player intends to give (capped at wealth)."""
-    wealth = max(0, int(player.get("wealth") or 0))
-    if wealth <= 0:
-        return 0
-    m = _GIVE_AMOUNT.search(action or "")
-    if m:
-        return min(wealth, int(m.group(1)))
-    if re.search(r"\bgive\b", action or "", re.I):
-        return wealth
-    return 0
 
 
 def validate_give(action, player, npc):

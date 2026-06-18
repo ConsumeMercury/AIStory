@@ -5,6 +5,7 @@ Tags (stripped before player sees prose):
   [FACT: speaking | npc_id]
   [FACT: death | npc_id]
   [FACT: place | place_name]
+  [FACT: item | item_label]
   [SCHEDULE: ...]  (handled in scheduled_events.py)
 """
 
@@ -21,17 +22,21 @@ _FACT_DEATH = re.compile(
 _FACT_PLACE = re.compile(
     r"\[FACT:\s*place\s*\|\s*(?P<name>[^\]|]+?)\s*\]", re.I,
 )
-_ALL_FACT_TAGS = (_FACT_SPEAKING, _FACT_DEATH, _FACT_PLACE)
+_FACT_ITEM = re.compile(
+    r"\[FACT:\s*item\s*\|\s*(?P<label>[^\]|]+?)\s*\]", re.I,
+)
+_ALL_FACT_TAGS = (_FACT_SPEAKING, _FACT_DEATH, _FACT_PLACE, _FACT_ITEM)
 
 
 def parse_narrator_facts(text):
     """Extract structured fact declarations from narrator output."""
     if not text:
-        return {"speaking": [], "death": [], "places": [], "schedules": []}
+        return {"speaking": [], "death": [], "places": [], "items": [], "schedules": []}
     speaking = []
     death = []
     places = []
-    seen_s, seen_d, seen_p = set(), set(), set()
+    items = []
+    seen_s, seen_d, seen_p, seen_i = set(), set(), set(), set()
     for m in _FACT_SPEAKING.finditer(text):
         nid = m.group("id").strip()
         if nid not in seen_s:
@@ -47,11 +52,17 @@ def parse_narrator_facts(text):
         if name and name.lower() not in seen_p:
             seen_p.add(name.lower())
             places.append(name)
+    for m in _FACT_ITEM.finditer(text):
+        label = (m.group("label") or "").strip()
+        if label and label.lower() not in seen_i:
+            seen_i.add(label.lower())
+            items.append(label)
     schedules = parse_schedule_tags(text)
     return {
         "speaking": speaking,
         "death": death,
         "places": places,
+        "items": items,
         "schedules": schedules,
     }
 
@@ -64,6 +75,8 @@ def strip_narrator_facts(text):
     for pat in _ALL_FACT_TAGS:
         cleaned = pat.sub("", cleaned)
     cleaned = strip_schedule_tags(cleaned)
+    cleaned = re.sub(r"\[(?:FACT|SCHEDULE):[^\]]*$", "", cleaned, flags=re.I | re.M)
+    cleaned = re.sub(r"\[(?:FACT|SCHEDULE):[^\]]*\]", "", cleaned, flags=re.I)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
 
@@ -77,6 +90,8 @@ def build_fact_emission_block(scene_state=None, action_ctx=None):
         "- If an NPC names a specific go-to place in quoted dialogue: "
         "[FACT: place | place_name]",
         "- Timed promises: [SCHEDULE: event_id | label | +Nh] (required for WHEN commitments)",
+        "- If protagonist acquires an item this beat (search/give/trade authorized): "
+        "[FACT: item | item_label]",
         "Use real cast ids from SCENE FACTS only — never invent ids in tags.",
         "Every dialogue beat with quoted speech MUST include [FACT: speaking | focal_npc_id].",
     ]
@@ -139,7 +154,29 @@ def validate_narrator_facts(facts, player, npcs, scene_state, action_ctx, focal_
                 f"does not match focal npc {focal!r}"
             )
 
+    if facts.get("items") and ctx.get("inventory_missing"):
+        issues.append(
+            "FACT item tag emitted but action referenced items protagonist lacks"
+        )
+    if facts.get("items") and not _sim_item_change_ok(ctx):
+        for label in facts["items"]:
+            issues.append(
+                f"FACT item tag {label!r} without authorized acquisition this beat"
+            )
+
     return issues
+
+
+def _sim_item_change_ok(ctx):
+    if not ctx:
+        return False
+    if ctx.get("acquired_item"):
+        return True
+    if ctx.get("give_amount") and ctx.get("kind") in ("give", "trade"):
+        return True
+    if ctx.get("kind") in ("search", "trade") and not ctx.get("search_refused"):
+        return True
+    return False
 
 
 _DIALOGUE_AT_PLACE = re.compile(

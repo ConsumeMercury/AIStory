@@ -33,78 +33,41 @@ def run_world_health_report(*, strict=False):
     institutions = load("world/institutions.json", {})
     rumors = load("rumors/rumors.json", [])
     events = load("events/event_log.json", [])
+    world = load("world/world_state.json", {})
+    relationships = load("characters/relationships.json", {})
+    npc_memories = load("characters/npc_memories.json", {})
+    memories = load("characters/memories.json", {})
+
+    from simulation.world_clock import ensure_clock_coherent
+    from simulation.world_integrity import run_integrity_audit
+
+    world, clock_fixed = ensure_clock_coherent(world, persist=False)
+    if clock_fixed:
+        warnings.append(
+            "world clock was stale (time_of_day/hour drift) — recomputed in-memory for audit"
+        )
+
+    audit_issues, audit_warnings = run_integrity_audit(
+        player=player,
+        npcs=npcs,
+        areas=areas,
+        institutions=institutions,
+        rumors=rumors,
+        events=events,
+        world=world,
+        relationships=relationships,
+        npc_memories=npc_memories,
+        memories=memories,
+    )
+    issues.extend(audit_issues)
+    warnings.extend(audit_warnings)
 
     if not player.get("area"):
         warnings.append("player has no area set")
 
-    focus = player.get("scene_focus")
-    if focus and focus not in npcs:
-        issues.append(f"scene_focus {focus!r} not in npcs.json")
-    elif focus and npcs.get(focus, {}).get("status") != "alive":
-        issues.append(f"scene_focus {focus!r} points to non-alive NPC")
-    elif focus:
-        focus_npc = npcs.get(focus, {})
-        player_area = player.get("area")
-        if player_area and focus_npc.get("area") and focus_npc.get("area") != player_area:
-            warnings.append(
-                f"scene_focus {focus!r} is in {focus_npc.get('area')!r}, player in {player_area!r}"
-            )
-
-    pending = player.get("pending_target_clarification")
-    if pending:
-        opts = pending.get("options") or []
-        stale = [o.get("id") for o in opts if o.get("id") and o.get("id") not in npcs]
-        if stale:
-            issues.append(f"pending_target_clarification references missing NPCs: {stale[:3]}")
-
-    cast = player.get("scene_cast") or {}
-    cast_ids = cast.get("ids") or []
-    dead_cast = [
-        cid for cid in cast_ids
-        if cid not in npcs or npcs[cid].get("status") != "alive"
-    ]
-    if dead_cast:
-        warnings.append(f"scene_cast lists {len(dead_cast)} absent/dead NPC id(s)")
-
     stats = player.get("stats") or {}
     if player and not stats.get("max_health"):
         warnings.append("player stats missing max_health")
-
-    pipe = player.get("starting_pipeline") or {}
-    pipe_area = pipe.get("area_id")
-    if pipe_area and pipe_area not in areas:
-        warnings.append(f"starting_pipeline area {pipe_area!r} missing from areas")
-
-    case = player.get("active_case") or {}
-    if case and not case.get("solved"):
-        victim = case.get("victim_id")
-        if victim and victim in npcs and npcs[victim].get("status") == "alive":
-            if case.get("stage", 0) > 0:
-                warnings.append("active case victim still alive after investigation started")
-        for sid in case.get("suspect_ids") or []:
-            if sid not in npcs:
-                issues.append(f"case suspect {sid!r} missing from npcs")
-
-    orphan_areas = []
-    for nid, npc in npcs.items():
-        if npc.get("status") != "alive":
-            continue
-        aid = npc.get("area")
-        if aid and aid not in areas:
-            orphan_areas.append(nid)
-    if orphan_areas:
-        warnings.append(f"{len(orphan_areas)} NPC(s) reference unknown areas")
-
-    dead_inst_refs = 0
-    for inst in institutions.values():
-        members = inst.get("members") or []
-        if isinstance(members, dict):
-            members = list(members.keys())
-        for mid in list(members)[:50]:
-            if mid not in npcs:
-                dead_inst_refs += 1
-    if dead_inst_refs:
-        warnings.append(f"{dead_inst_refs} institution member refs point to missing NPCs")
 
     if isinstance(rumors, list) and len(rumors) > 180:
         warnings.append(f"rumor list large ({len(rumors)} entries)")

@@ -118,6 +118,8 @@ def record_beat_outcome(
             world.get("day"),
             target_id=target_id,
             intensity=1.2 if kind in ("threaten", "help", "insult") else 1.0,
+            kind=kind,
+            player_speech=ctx.get("player_speech"),
         )
 
     importance = 40

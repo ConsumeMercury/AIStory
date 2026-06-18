@@ -7,6 +7,7 @@ behaviour in simulation and narration.
 """
 
 import random
+import re
 from storage import load, save
 
 MEM_FILE = "characters/npc_memories.json"
@@ -79,24 +80,62 @@ def _decay_and_trim(store):
         store[nid] = kept[:MAX_PER_NPC]
 
 
+def _humanize_player_action_summary(action_text, memory_tag, *, kind=None, player_speech=None):
+    """Turn raw player commands into short narrative beats for episodic memory."""
+    if player_speech:
+        return f'they said "{player_speech.strip()[:48]}"'
+    lower = (action_text or "").strip().lower()
+    if re.search(r"\blook\s+around\b", lower):
+        return "looked around the place"
+    if re.search(r"\b(?:talk|speak)\s+(?:to|with)\b", lower):
+        return "approached to speak"
+    if re.search(r"\bask\b", lower) and "name" in lower:
+        return "asked for a name"
+    if memory_tag == "attack":
+        return "attacked them"
+    if memory_tag == "help":
+        return "offered help"
+    if memory_tag == "gift":
+        return "gave them something"
+    if memory_tag == "threat":
+        return "threatened them"
+    if memory_tag == "insult":
+        return "insulted them"
+    if memory_tag == "theft":
+        return "tried to steal from them"
+    if memory_tag == "trade":
+        return "traded with them"
+    if memory_tag == "withdrawal":
+        return "turned away"
+    if memory_tag == "observation":
+        return "watched too closely"
+    if memory_tag == "socialise":
+        return "approached to speak"
+    if kind == "explore":
+        return "looked around the place"
+    return {
+        "rest": "rested nearby",
+        "general": "came near",
+    }.get(memory_tag, "came near")
+
+
 def record_player_action(present_npc_ids, memory_tag, action_text, location, tick, day,
-                         target_id=None, intensity=1.0):
+                         target_id=None, intensity=1.0, *, kind=None, player_speech=None):
     """
     Write episodic memories for NPCs who witnessed or were targeted by the player.
     Called synchronously from story_loop on every player turn.
     """
     store = load(MEM_FILE, {})
     tpl, val, sal = _PLAYER_MEM.get(memory_tag, _PLAYER_MEM["general"])
-    action_snip = (action_text or "")[:80].strip()
-    if action_snip:
-        witness_text = f"saw the outsider: {action_snip}"
-    else:
-        witness_text = f"saw the outsider nearby"
+    beat = _humanize_player_action_summary(
+        action_text, memory_tag, kind=kind, player_speech=player_speech,
+    )
+    witness_text = f"saw the outsider {beat}"
 
     for nid in present_npc_ids:
         if nid == target_id:
-            if action_snip and memory_tag not in ("general", "rest", "withdrawal", "observation"):
-                text = f"I remember when the outsider {action_snip[:58]}"
+            if beat and memory_tag not in ("general", "rest", "withdrawal", "observation"):
+                text = f"I remember when the outsider {beat}"
             else:
                 text = tpl
             s = min(100, sal * intensity)
@@ -107,10 +146,10 @@ def record_player_action(present_npc_ids, memory_tag, action_text, location, tic
             v = val * 0.35
 
         _add(store, nid, text, v, s, tick, day, ["player"], location, source="player")
-        if target_id and nid == target_id and action_snip:
+        if target_id and nid == target_id and player_speech:
             _add(
                 store, nid,
-                f"what they said: \"{action_snip[:48]}\"",
+                f'what they said: "{player_speech.strip()[:48]}"',
                 val, s * 0.65, tick, day,
                 ["player"], location, source="player",
             )

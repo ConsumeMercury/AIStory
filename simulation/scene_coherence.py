@@ -10,7 +10,7 @@ from simulation.npc_schedule import schedule_hint, next_appearance
 from simulation.local_places import resolve_local_movement
 from simulation.target_resolution import (
     action_mentions_role_or_descriptor,
-    resolve_action_target,
+    action_mentions_target_constraint,
     find_npc_by_name_in_text,
     npc_matches_action_role_hint,
 )
@@ -192,22 +192,25 @@ def resolve_target_and_absence(action, player, present, npcs, action_ctx, world,
             player["scene_focus"] = None
 
     if kind in DIALOGUE_KINDS and present:
-        has_role = action_mentions_role_or_descriptor(action, present=present)
+        from simulation.target_constraints import resolve_target
+        from simulation.target_resolution import apply_resolved_target_to_ctx
+
         tid = action_ctx.get("target_id")
-        if tid and tid in present_ids and has_role:
+        has_constraint = action_mentions_target_constraint(action, present=present)
+        if tid and tid in present_ids and has_constraint:
             current = next((n for n in present if n["id"] == tid), None)
             if current and not npc_matches_action_role_hint(action, current):
                 action_ctx["target_id"] = None
 
-        if not action_ctx.get("target_id") or has_role:
-            resolved = resolve_action_target(
-                action, player, present, npcs=npcs, kind=kind,
-            )
-            if resolved:
-                action_ctx["target_id"] = resolved["id"]
-            elif has_role:
-                action_ctx["target_id"] = None
-            elif not action_ctx.get("target_id"):
+        named = find_npc_by_name_in_text(action, npcs, player) if npcs else None
+        if named and named["id"] not in present_ids:
+            pass  # absent path handled above
+        else:
+            result = resolve_target(action, player, present, npcs=npcs, kind=kind)
+            apply_resolved_target_to_ctx(action_ctx, result)
+            if result.status.value == "ambiguous":
+                action_ctx.pop("target_id", None)
+            elif not action_ctx.get("target_id") and not has_constraint:
                 if len(present) == 1:
                     focus = player.get("scene_focus")
                     if focus and focus in present_ids:

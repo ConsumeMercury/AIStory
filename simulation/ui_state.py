@@ -846,5 +846,7 @@ def get_full_state():
             "can_undo": can_undo(),
             "gemini_configured": bool(api_key()),
             "debug_enabled": debug_enabled(),
+            "intent_echo": player.get("last_intent_echo") or "",
+            "interpretation_rephrase_count": len(player.get("interpretation_rephrase_log") or []),
         },
     }

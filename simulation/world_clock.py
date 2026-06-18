@@ -74,6 +74,15 @@ _UNTIL_TIME = re.compile(
 )
 
 
+def time_of_day_from_hour(hour):
+    """Authoritative time-of-day label for clock hour 0–23."""
+    h = int(hour) % HOURS_PER_DAY
+    return (
+        "deep night" if h < 5 else "dawn" if h < 8 else "morning" if h < 12
+        else "afternoon" if h < 17 else "evening" if h < 21 else "night"
+    )
+
+
 def _recompute(world):
     total_hours = world.get("hour_count", 0)
     world["day"] = total_hours // HOURS_PER_DAY + 1
@@ -83,13 +92,54 @@ def _recompute(world):
     # weather changes a few times a day, weighted by season
     if total_hours % 6 == 0 or "weather" not in world:
         world["weather"] = random.choice(WEATHER_BY_SEASON[world["season"]])
-    # human-readable time of day
-    h = world["hour"]
-    world["time_of_day"] = (
-        "deep night" if h < 5 else "dawn" if h < 8 else "morning" if h < 12
-        else "afternoon" if h < 17 else "evening" if h < 21 else "night"
-    )
+    world["time_of_day"] = time_of_day_from_hour(world["hour"])
     return world
+
+
+def clock_coherence_issue(world):
+    """Return issue string when stored time_of_day disagrees with hour, else None."""
+    if not world:
+        return None
+    hour = world.get("hour")
+    if hour is None:
+        return None
+    expected = time_of_day_from_hour(hour)
+    actual = (world.get("time_of_day") or "").strip()
+    if actual and actual != expected:
+        return (
+            f"clock drift: hour={hour} implies {expected!r} "
+            f"but time_of_day={actual!r}"
+        )
+    return None
+
+
+def ensure_clock_coherent(world, *, persist=False):
+    """
+    Recompute day/hour/season/time_of_day from hour_count.
+    Fixes stale saves where time_of_day drifted (e.g. hour=1 with time_of_day='day').
+    Returns (world, changed).
+    """
+    if not world:
+        return world, False
+    before = (
+        world.get("hour_count"),
+        world.get("hour"),
+        world.get("day"),
+        world.get("time_of_day"),
+        world.get("season"),
+    )
+    _recompute(world)
+    after = (
+        world.get("hour_count"),
+        world.get("hour"),
+        world.get("day"),
+        world.get("time_of_day"),
+        world.get("season"),
+    )
+    changed = before != after
+    if changed and persist:
+        save(WORLD_FILE, world)
+    return world, changed
 
 
 def hours_until_hour(current_hour, target_hour):

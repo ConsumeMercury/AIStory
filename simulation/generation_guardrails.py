@@ -77,6 +77,7 @@ def build_misname_directive(action, target_npc, npcs, target_id):
 
 def build_hard_constraints_block(
     focal_npc_id, focal_npc, scene_place, action_context=None, present=None, npcs=None,
+    world=None,
 ):
     """
     Final pre-write constraints — location, movement, and focal identity.
@@ -84,6 +85,17 @@ def build_hard_constraints_block(
     """
     ctx = action_context or {}
     lines = ["HARD CONSTRAINTS (override everything above):"]
+    if world:
+        from simulation.world_integrity import expected_time_of_day
+        hour = world.get("hour", 0)
+        tod = expected_time_of_day(world)
+        weather = world.get("weather") or "Clear"
+        day = world.get("day", 1)
+        lines.append(
+            f"- TEMPORAL LOCK: Day {day}, hour {hour} ({tod}), weather {weather}. "
+            "Atmosphere and lighting MUST match this — do NOT describe a different "
+            "time of day (no dawn sun at deep night; no midnight hush at noon)."
+        )
     if scene_place:
         lines.append(
             f"- LOCATION LOCK: {scene_place}. "

@@ -5,6 +5,7 @@ Validator chain registry — who checks what, and boundary trace summary.
 VALIDATOR_REGISTRY = (
     {"name": "prose_validator", "module": "prose_validator", "mode": "hard", "gates_regen": True},
     {"name": "narrator_facts", "module": "narrator_facts", "mode": "hard", "gates_regen": True},
+    {"name": "prose_assertion_guard", "module": "prose_assertion_guard", "mode": "hard", "gates_regen": True},
     {"name": "fact_gate", "module": "fact_gate", "mode": "hard", "gates_regen": True},
     {"name": "prose_auditor", "module": "prose_auditor", "mode": "shadow|on", "gates_regen": True},
     {"name": "narrative_trace", "module": "narrative_trace", "mode": "soft", "gates_regen": True},

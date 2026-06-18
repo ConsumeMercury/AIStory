@@ -43,6 +43,23 @@ def _require_world_files():
     return missing
 
 
+def test_interpretation_benchmark_offline():
+    from simulation.interpretation_benchmark import run_benchmark
+    result = run_benchmark()
+    assert result["total"] >= 20
+    assert result["pass_rate"] >= 0.85, result.get("failures")
+
+
+def test_interpretation_corpus_offline():
+    from simulation.action_interpretation import run_interpretation_corpus
+    from simulation.action_classifier import run_classifier_shadow_corpus
+    rows = run_interpretation_corpus()
+    assert len(rows) >= 10
+    assert any(r["tag"] == "negation" for r in rows)
+    shadow = run_classifier_shadow_corpus()
+    assert len(shadow) >= 5
+
+
 def test_imports():
     errors = _import_all_packages()
     assert not errors, "Import failures:\n" + "\n".join(errors)
@@ -328,6 +345,7 @@ def main():
 
         tests = [
             ("imports", test_imports),
+            ("interpretation_corpus", test_interpretation_corpus_offline),
             ("bootstrap_import", test_bootstrap_import),
             ("world_patch", test_world_patch),
             ("sim_tick", test_sim_tick),

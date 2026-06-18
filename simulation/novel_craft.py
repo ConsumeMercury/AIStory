@@ -60,9 +60,9 @@ FORM: Continuous paragraphs; end on the other person's line or a held silence.
 
 CRAFT_BY_KIND = {
     "explore": (
-        "BEAT TYPE — ARRIVAL / MOVEMENT:\n"
-        "First visit: one paragraph of place. Return visit: PROSE STRUCTURE — CONTINUATION applies — "
-        "new angle only, no second weather opener.\n"
+        "BEAT TYPE — MOVEMENT:\n"
+        "Return visit: PROSE STRUCTURE — CONTINUATION applies — new angle only, no second weather opener. "
+        "One or two short paragraphs.\n"
         "The protagonist observes only; they do NOT speak unless given exact words."
     ),
     "talk": (
@@ -139,7 +139,17 @@ CRAFT_BY_KIND = {
 }
 
 
-def craft_for_kind(action_kind):
+_OPENING_EXPLORE_CRAFT = (
+    "BEAT TYPE — OPENING ARRIVAL:\n"
+    "Full 3–4 paragraphs. Orient the player in the environment: spatial layout, who belongs here, "
+    "what this place is for, one live tension, and one implicit hook for what they might do next. "
+    "Observations only — no protagonist speech."
+)
+
+
+def craft_for_kind(action_kind, opening=False):
+    if action_kind == "explore" and opening:
+        return _OPENING_EXPLORE_CRAFT
     return CRAFT_BY_KIND.get(action_kind, (
         "BEAT TYPE — ACTION:\n"
         "Render the protagonist's attempt as lived fiction — physical, irreversible, specific."
@@ -233,27 +243,29 @@ def frequency_penalty_for_kind(action_kind):
     return FREQUENCY_PENALTY_BY_KIND.get(action_kind, DEFAULT_FREQUENCY_PENALTY)
 
 
-def token_budget_for_kind(action_kind):
+def token_budget_for_kind(action_kind, opening=False):
     """Tight budgets keep scenes conversational — player acts every turn."""
+    if action_kind == "explore" and opening:
+        return 2400
     return {
-        "ask_name": 700,
-        "withdraw": 800,
-        "talk": 1400,
-        "show_respect": 1400,
-        "insult": 1400,
-        "threaten": 1800,
-        "give": 1600,
-        "help": 1800,
-        "personal_talk": 2800,
-        "explore": 2400,
-        "rest": 2200,
-        "travel": 2600,
-        "approach": 1800,
-        "investigate": 2200,
-        "ask_about": 1600,
-        "attack": 3200,
-        "examine": 1800,
-        "observe": 1800,
-        "hunt": 1800,
-        "guild": 1600,
-    }.get(action_kind, 2200)
+        "ask_name": 550,
+        "withdraw": 650,
+        "talk": 1100,
+        "show_respect": 1100,
+        "insult": 1100,
+        "threaten": 1400,
+        "give": 1300,
+        "help": 1400,
+        "personal_talk": 2200,
+        "explore": 1800,
+        "rest": 1700,
+        "travel": 2000,
+        "approach": 1400,
+        "investigate": 1700,
+        "ask_about": 1300,
+        "attack": 2600,
+        "examine": 1400,
+        "observe": 1400,
+        "hunt": 1400,
+        "guild": 1300,
+    }.get(action_kind, 1700)

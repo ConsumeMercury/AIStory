@@ -76,6 +76,31 @@ def validate_turn_output(
     if place_gap:
         fact_issues = list(fact_issues) + [place_gap]
 
+    from simulation.prose_assertion_guard import validate_prose_assertions
+    assertion_issues = validate_prose_assertions(
+        text,
+        player=player,
+        npcs=npcs,
+        action_ctx=action_ctx,
+        focal_npc_id=focal_npc_id,
+        present_npcs=present_npcs,
+        known_ids=known_ids,
+        facts=facts,
+        scene_state=scene_state,
+        world=(scene_state and {
+            "hour": scene_state.hour,
+            "day": scene_state.day,
+            "time_of_day": scene_state.time_of_day,
+        }) or None,
+    )
+    if action_ctx and action_ctx.get("inventory_missing"):
+        labels = ", ".join(action_ctx["inventory_missing"][:3])
+        assertion_issues = list(assertion_issues) + [
+            f"action references missing inventory ({labels}) — prose must not show protagonist holding it"
+        ]
+    if assertion_issues:
+        prose_issues = list(prose_issues) + assertion_issues
+
     auditor_confirmed, auditor_meta = run_prose_audit(
         text,
         player=player,

@@ -85,6 +85,10 @@ def ensure_world_extensions():
         world["drama_seeded"] = True
         save("world/world_state.json", world)
 
+    from simulation.world_clock import ensure_clock_coherent
+    world = load("world/world_state.json", {})
+    ensure_clock_coherent(world, persist=True)
+
     if player and not player.get("goals"):
         player["goals"] = build_player_goals(
             player.get("motivation", ""),

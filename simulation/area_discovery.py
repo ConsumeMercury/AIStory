@@ -185,8 +185,9 @@ def area_intro_directive(arrival):
         return ""
     return (
         f"FIRST VISIT — {arrival['name']} ({arrival['subtitle']}): "
-        f"Begin with ONE brief establishing paragraph (3–5 sentences) that orients the reader — "
-        f"what this place feels like, who belongs here, and what tension hangs in the air. "
+        f"Opening scene — use the full 3–4 paragraph length to orient the player in this place: "
+        f"how the space is laid out, who belongs here, what the district is for, "
+        f"one tension or rule they should notice, and one cue for what they could do next. "
         f"No bullet lists or stat dumps. Grounding notes: {arrival['description']}"
     )
 

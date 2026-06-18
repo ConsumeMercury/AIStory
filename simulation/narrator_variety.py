@@ -180,20 +180,27 @@ def build_continuity_note(journal, action_kind, player_action, player=None, acti
 def scene_length_hint(action_kind, opening=False):
     """Paragraph count — favor dialogue and player turns over set pieces."""
     if opening:
-        return "LENGTH: 3–4 paragraphs. Arrival only — no conversation yet, no protagonist dialogue."
+        return (
+            "LENGTH: 3–4 paragraphs (opening scene — keep this full length). "
+            "P1: spatial layout — where the protagonist stands and how the place is arranged. "
+            "P2: who belongs here and what this place is for (trade, worship, labor, refuge). "
+            "P3: one live tension, rule, or wrong detail they should notice. "
+            "P4 (optional): one landmark, path, or activity that hints what they could do next. "
+            "No conversation yet; no protagonist dialogue."
+        )
     if action_kind in ("ask_name", "withdraw"):
-        return "LENGTH: 1–2 paragraphs. Dialogue-forward; cut all filler."
+        return "LENGTH: 1 paragraph. Dialogue-forward; cut all filler."
     if action_kind in ("talk", "show_respect", "insult", "threaten", "give", "help"):
-        return "LENGTH: 2–3 paragraphs. Most words in quotation marks. End on their last line."
+        return "LENGTH: 1–2 paragraphs. Most words in quotation marks. End on their last line."
     if action_kind == "personal_talk":
-        return "LENGTH: 3–5 paragraphs. Fragments and pauses — still not a speech."
+        return "LENGTH: 2–3 paragraphs. Fragments and pauses — still not a speech."
     if action_kind in ("explore", "travel", "rest"):
-        return "LENGTH: 3–4 paragraphs. One detail per paragraph; stop before the scene resolves."
+        return "LENGTH: 2–3 paragraphs. One sharp detail per paragraph; stop before the scene resolves."
     if action_kind == "attack":
-        return "LENGTH: 2–4 paragraphs. Aftermath weighs more than the swing."
+        return "LENGTH: 1–3 paragraphs. Aftermath weighs more than the swing."
     if action_kind in ("confess", "search"):
-        return "LENGTH: 1–3 paragraphs. Dialogue-forward where applicable."
-    return "LENGTH: 2–4 paragraphs."
+        return "LENGTH: 1–2 paragraphs. Dialogue-forward where applicable."
+    return "LENGTH: 1–3 paragraphs."
 
 
 def scene_mode_rules(action_kind, has_journal):
@@ -263,10 +270,13 @@ def scene_mode_rules(action_kind, has_journal):
         )
     if action_kind == "explore" and not has_journal:
         return (
-            "SCENE MODE — FIRST ARRIVAL:\n"
-            "- You have just arrived. Place, mood, one wrong detail.\n"
+            "SCENE MODE — OPENING ARRIVAL:\n"
+            "- The player's first beat — orient them in the environment (layout, purpose, social texture).\n"
+            "- Cover: where things are relative to the protagonist, who visibly belongs here, "
+            "what work or ritual happens in this place, and one tension or rule in the air.\n"
+            "- Use at least two senses beyond sight across the scene.\n"
             "- No protagonist dialogue. No full conversation — at most someone visible in the distance.\n"
-            "- End with the place still open, not a solved scene."
+            "- End with the place still open and legible, not a solved scene."
         )
     return ""
 

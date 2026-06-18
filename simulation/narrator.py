@@ -374,7 +374,8 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
         kind, action_context, player, journal, aid, focal_npc_id,
     )
     mode_block = scene_mode_rules(kind, has_journal)
-    length_block = scene_length_hint(kind, opening=not has_journal and kind == "explore")
+    is_opening = not has_journal and kind == "explore"
+    length_block = scene_length_hint(kind, opening=is_opening)
 
     event_block = ""
     if scene_event and kind not in ("ask_name", "talk", "personal_talk", "withdraw", "attack", "confess"):
@@ -426,8 +427,8 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
         if extras:
             immersion = "\n" + "\n\n".join(extras) + "\n"
 
-    craft_kind = craft_for_kind(kind)
-    token_budget = token_budget_for_kind(kind)
+    craft_kind = craft_for_kind(kind, opening=is_opening)
+    token_budget = token_budget_for_kind(kind, opening=is_opening)
     has_focal = bool(focal_npc_id)
     profile = narrator_block_profile()
     craft_core = craft_core_for_beat(has_journal=has_journal, kind=kind)

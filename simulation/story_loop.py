@@ -30,6 +30,7 @@ from simulation.scene_coherence import (
 from simulation.local_places import resolve_local_movement, record_narrator_places
 from simulation.narrator_items import record_narrator_items
 from simulation.generation_guardrails import build_hard_constraints_block, build_misname_directive
+from simulation.world_clock import ensure_clock_coherent
 from simulation.prose_validator import (
     log_scene_prose_issues,
     build_prose_correction_block,
@@ -125,6 +126,8 @@ from simulation.target_ambiguity import (
     set_pending_clarification,
     clear_pending_clarification,
     build_clarification_scene,
+    should_abandon_clarification,
+    pending_clarification_exhausted,
 )
 
 WORLD_FILE = "world/world_state.json"
@@ -134,6 +137,69 @@ PLAYER_FILE = "player/player.json"
 RUMOR_FILE = "rumors/rumors.json"
 LOC_FILE = "world/locations.json"
 AREAS_FILE = "world/areas.json"
+
+
+def _load_world(*, persist=True):
+    """Load world state with clock fields recomputed from hour_count."""
+    world = load(WORLD_FILE, {})
+    world, _ = ensure_clock_coherent(world, persist=persist)
+    return world
+
+
+def _clarify_only_turn(action_ctx, *, force_reprompt=False):
+    """True when this beat should not advance world time or heavy mechanics."""
+    if force_reprompt:
+        return True
+    ctx = action_ctx or {}
+    return bool(
+        ctx.get("interpretation_clarify")
+        or ctx.get("target_ambiguous")
+        or ctx.get("duplicate_action")
+        or ctx.get("clarification_reprompt")
+    )
+
+
+def _advance_world_for_turn(action, kind, action_ctx, player):
+    """Advance simulation clock for one player action."""
+    with state_lock():
+        world = _load_world(persist=True)
+        if kind == "wait":
+            wait_info = resolve_wait_advance(action, world, player, player.get("area"))
+            if wait_info.get("refused"):
+                action_ctx["wait_no_change"] = True
+                action_ctx["story_directive"] = (
+                    action_ctx.get("story_directive", "")
+                    + " "
+                    + wait_info.get("refusal_message", "WAIT REFUSED — no time passes.")
+                ).strip()
+            else:
+                hours = wait_info.get("hours") or 0
+                if hours > 0:
+                    world = advance_clock(hours)
+                action_ctx["wait_hours"] = hours
+                if wait_info.get("target_label"):
+                    action_ctx["wait_target"] = wait_info["target_label"]
+                if wait_info.get("event"):
+                    action_ctx["wait_event"] = wait_info["event"].get("id")
+                fired = fire_due_events(player, world, player.get("area"))
+                if fired:
+                    action_ctx["events_fired"] = fired
+                    action_ctx["story_directive"] = (
+                        action_ctx.get("story_directive", "")
+                        + " "
+                        + event_fired_directive(fired)
+                    ).strip()
+                elif hours > 0 and wait_info.get("target_label"):
+                    action_ctx["story_directive"] = (
+                        action_ctx.get("story_directive", "")
+                        + f" TIME PASSED: {hours} hour(s) — now {world.get('time_of_day', '?')}."
+                    ).strip()
+        else:
+            advance_for_action(kind)
+        world = _load_world(persist=False)
+        save(WORLD_FILE, world)
+        save(PLAYER_FILE, player)
+    return world
 
 
 @contextmanager
@@ -591,7 +657,7 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
 
     with state_lock():
         push_undo_snapshot()
-        world = load(WORLD_FILE, {})
+        world = _load_world(persist=True)
         npcs = load(NPC_FILE, {})
         monsters = load(MON_FILE, {})
         player = load(PLAYER_FILE, {})
@@ -621,6 +687,16 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
     pending_clarification = player.get("pending_target_clarification")
     clarified_kind, clarified_id = resolve_clarification_pick(action, player, present, npcs)
     replay_action = action
+    force_clarification_reprompt = False
+    if pending_clarification and not clarified_id:
+        if should_abandon_clarification(action, player):
+            clear_pending_clarification(player)
+            pending_clarification = None
+        elif pending_clarification_exhausted(player):
+            clear_pending_clarification(player)
+            pending_clarification = None
+        else:
+            force_clarification_reprompt = True
     if clarified_id:
         forced_kind = clarified_kind
         forced_target_id = clarified_id
@@ -651,6 +727,17 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
     action_ctx = interpret_action(
         replay_action, player, present, world, npcs=npcs, scene_state=scene_state,
     )
+    from simulation.interpretation_signals import log_rephrase_pair
+    log_rephrase_pair(player, action, action_ctx, tick=tick)
+    from simulation.action_interpretation import apply_duplicate_action_guard
+    if (
+        not clarified_id
+        and not pending_clarification
+        and apply_duplicate_action_guard(action, player, action_ctx)
+    ):
+        kind = action_ctx.get("kind", "general")
+    from simulation.referent_stack import resolve_anaphora
+    resolve_anaphora(replay_action, player, present, npcs, action_ctx)
     kind = action_ctx.get("kind", "general")
     from simulation.local_places import looks_like_local_movement
     if looks_like_local_movement(action) and kind in ("general", "explore", "observe"):
@@ -669,47 +756,24 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
             + id_directive
         ).strip()
 
-    with state_lock():
-        world = load(WORLD_FILE, {})
-        if kind == "wait":
-            wait_info = resolve_wait_advance(action, world, player, player.get("area"))
-            if wait_info.get("refused"):
-                action_ctx["wait_no_change"] = True
-                action_ctx["story_directive"] = (
-                    action_ctx.get("story_directive", "")
-                    + " "
-                    + wait_info.get("refusal_message", "WAIT REFUSED — no time passes.")
-                ).strip()
-            else:
-                hours = wait_info.get("hours") or 0
-                if hours > 0:
-                    world = advance_clock(hours)
-                action_ctx["wait_hours"] = hours
-                if wait_info.get("target_label"):
-                    action_ctx["wait_target"] = wait_info["target_label"]
-                if wait_info.get("event"):
-                    action_ctx["wait_event"] = wait_info["event"].get("id")
-                fired = fire_due_events(player, world, player.get("area"))
-                if fired:
-                    action_ctx["events_fired"] = fired
-                    action_ctx["story_directive"] = (
-                        action_ctx.get("story_directive", "")
-                        + " "
-                        + event_fired_directive(fired)
-                    ).strip()
-                elif hours > 0 and wait_info.get("target_label"):
-                    action_ctx["story_directive"] = (
-                        action_ctx.get("story_directive", "")
-                        + f" TIME PASSED: {hours} hour(s) — now {world.get('time_of_day', '?')}."
-                    ).strip()
-                save(PLAYER_FILE, player)
-        else:
-            advance_for_action(kind)
-        world = load(WORLD_FILE, {})
-        save(WORLD_FILE, world)
-
     areas_data = load(AREAS_FILE, {})
-    resolve_target_and_absence(action, player, present, npcs, action_ctx, world, areas_data)
+    resolve_target_and_absence(replay_action, player, present, npcs, action_ctx, world, areas_data)
+    from simulation.target_constraints import extract_constraints
+    tc = extract_constraints(replay_action, player, present, npcs)
+    action_ctx["regex_constraints"] = {
+        "gender": tc.gender,
+        "role": tc.role,
+        "name_query": tc.name_query,
+        "physical": list(tc.physical or []),
+    }
+    from simulation.action_interpretation import (
+        build_interpretation_trace,
+        resolve_stale_or_dead_referent,
+    )
+    resolve_stale_or_dead_referent(replay_action, player, present, npcs, action_ctx)
+    from simulation.topic_resolution import apply_topic_gates
+    apply_topic_gates(action_ctx, player, npcs, present)
+    action_ctx["interpretation_trace"] = build_interpretation_trace(action_ctx)
     kind = action_ctx["kind"]
 
     if kind == "explore" and present:
@@ -725,7 +789,7 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
         )
 
     if kind == "find":
-        found = resolve_find_person(action, player, present, npcs)
+        found = resolve_find_person(replay_action, player, present, npcs)
         if found:
             action_ctx["target_id"] = found["id"]
             facts = build_find_facts(found)
@@ -736,10 +800,10 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
         else:
             action_ctx["target_id"] = None
             from simulation.target_ambiguity import collect_description_matches
-            query_npc = resolve_npc_by_name_query(action, npcs, player)
-            if len(collect_description_matches(action, present)) <= 1:
+            query_npc = resolve_npc_by_name_query(replay_action, npcs, player)
+            if len(collect_description_matches(replay_action, present)) <= 1:
                 action_ctx["find_failed"] = True
-                query = extract_find_name_query(action)
+                query = extract_find_name_query(replay_action)
                 fail_facts = build_find_failed_facts(query_npc, query=query)
                 action_ctx["story_directive"] = (
                     action_ctx.get("story_directive", "")
@@ -788,7 +852,7 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
             ).strip()
 
     if kind == "attack" and not action_ctx.get("target_id"):
-        pron = resolve_pronoun_target(action, player, present)
+        pron = resolve_pronoun_target(replay_action, player, present)
         if pron:
             action_ctx["target_id"] = pron["id"]
 
@@ -800,9 +864,10 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
         not action_ctx.get("target_id")
         and not action_ctx.get("absent_npc")
         and not action_ctx.get("clarification_resolved")
+        and not action_ctx.get("interpretation_clarify")
     ):
         ambiguity = detect_target_ambiguity(
-            action, player, present, npcs, kind,
+            replay_action, player, present, npcs, kind,
             target_id=action_ctx.get("target_id"),
         )
         if ambiguity:
@@ -816,6 +881,18 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
             ).strip()
             with state_lock():
                 save(PLAYER_FILE, player)
+
+    if force_clarification_reprompt and player.get("pending_target_clarification"):
+        action_ctx["target_ambiguous"] = True
+        action_ctx["target_id"] = None
+        action_ctx["clarification_reprompt"] = True
+        action_ctx["story_directive"] = (
+            (action_ctx.get("story_directive") or "")
+            + " CLARIFICATION UNANSWERED — re-prompt; do not advance the scene as if a target was chosen."
+        ).strip()
+
+    if not _clarify_only_turn(action_ctx, force_reprompt=force_clarification_reprompt):
+        world = _advance_world_for_turn(action, kind, action_ctx, player)
 
     area_arrival = None
     delayed = pop_delayed_directive(player)
@@ -831,7 +908,7 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
         with state_lock():
             save(PLAYER_FILE, player)
 
-    if kind == "approach":
+    if kind == "approach" and not _clarify_only_turn(action_ctx, force_reprompt=force_clarification_reprompt):
         prior_present = list(present)
         prior_cast_ids = collect_prior_cast_ids(player, prior_present)
         sub, local_msg = resolve_local_movement(action, player, player.get("area"))
@@ -861,7 +938,7 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
             ).strip()
             extra_directive = fail_msg
 
-    if kind == "travel":
+    if kind == "travel" and not _clarify_only_turn(action_ctx, force_reprompt=force_clarification_reprompt):
         from simulation.travel_engine import travel, list_destinations
         prior_present = list(present)
         prior_cast_ids = collect_prior_cast_ids(player, prior_present)
@@ -1197,7 +1274,7 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
                     action_ctx.get("story_directive", "") + " " + economy_directive
                 ).strip()
 
-    if kind == "attack" and not action_ctx.get("target_ambiguous"):
+    if kind == "attack" and not _clarify_only_turn(action_ctx, force_reprompt=force_clarification_reprompt):
         with state_lock():
             out = _do_combat(player, npcs, monsters, present, tick, action, action_ctx)
             directive, combat_target, err, combat_snap, _result = out
@@ -1381,6 +1458,7 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
 
     hard_constraints = build_hard_constraints_block(
         focal_id, focal_npc, scene_place, action_ctx, present=present, npcs=npcs,
+        world=world,
     )
     sched_block = build_scheduled_events_block(player, player.get("area"), world)
     if sched_block:
@@ -1401,9 +1479,13 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
     output_boundary = {}
     tagged_issues = []
 
-    if action_ctx.get("target_ambiguous"):
+    if action_ctx.get("target_ambiguous") or force_clarification_reprompt:
         pending = player.get("pending_target_clarification") or {}
         scene = build_clarification_scene(pending)
+        gate_issues = []
+    elif action_ctx.get("interpretation_clarify"):
+        from simulation.action_interpretation import build_interpretation_clarify_scene
+        scene = build_interpretation_clarify_scene(action_ctx)
         gate_issues = []
     else:
         scene, gate_issues, output_boundary = _generate_scene_with_validation(
@@ -1465,10 +1547,16 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
         if scene:
             area_id = player.get("area")
             changed = False
-            if record_narrator_places(player, scene, area_id):
-                changed = True
-            if record_narrator_items(player, scene, area_id, tick=tick):
-                changed = True
+            prose_issues = output_boundary.get("prose_issues") or []
+            from simulation.prose_assertion_guard import issues_block_narrator_registration
+            skip_narrator_state = issues_block_narrator_registration(
+                list(gate_issues or []) + list(prose_issues),
+            )
+            if not skip_narrator_state:
+                if record_narrator_places(player, scene, area_id):
+                    changed = True
+                if record_narrator_items(player, scene, area_id, tick=tick):
+                    changed = True
             if record_scheduled_events(player, scene, area_id, world):
                 changed = True
             if changed:
@@ -1503,6 +1591,8 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
         journal_areas = load(AREAS_FILE, {})
         journal_area = journal_areas.get(player.get("area"), {})
         journal_place = place_label(player, journal_area)
+        from simulation.referent_stack import update_referent_stack
+        update_referent_stack(player, action_ctx, present, npcs)
         player.setdefault("journal", []).append({
             "tick": tick, "day": world.get("day"), "hour": world.get("hour"),
             "action": action, "kind": kind,
@@ -1518,6 +1608,7 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
             "approach_failed": bool(action_ctx.get("approach_failed")),
             "travel_failed": bool(action_ctx.get("travel_failed")),
             "target_ambiguous": bool(action_ctx.get("target_ambiguous")),
+            "interpretation_clarify": bool(action_ctx.get("interpretation_clarify")),
             "combat_fatal": action_ctx.get("combat_fatal") if kind == "attack" else player.get("last_combat_fatal"),
             "boundary": {
                 "classifier_mode": turn_boundary.get("classifier_mode"),
@@ -1559,7 +1650,9 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
         action_ctx["narrative_trace"] = narrative_trace
         action_ctx["narrative_issues"] = narrative_issues
         turn_boundary["narrative_issue_count"] = len(narrative_issues)
-        update_session_boundary_stats(player, turn_boundary, tagged_issues)
+        action_ctx["interpretation_trace"] = build_interpretation_trace(action_ctx)
+        player["last_intent_echo"] = action_ctx.get("intent_echo") or ""
+        update_session_boundary_stats(player, turn_boundary, tagged_issues, action_ctx=action_ctx)
         persist_boundary_trace(
             player,
             tick=tick,

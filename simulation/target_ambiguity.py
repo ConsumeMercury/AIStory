@@ -7,9 +7,10 @@ import logging
 import re
 
 from generation.descriptor_generator import short_descriptor
+from simulation.target_constraints import TargetStatus, resolve_target
 from simulation.target_resolution import (
     TARGET_KINDS,
-    action_mentions_role_or_descriptor,
+    action_mentions_target_constraint,
     find_npc_by_name_in_text,
 )
 
@@ -69,7 +70,7 @@ def collect_name_matches(action, npcs, player, present_ids):
 def collect_gender_matches(action, present):
     text = (action or "").lower()
     female_hint = bool(re.search(r"\b(her|she|woman|girl|lady)\b", text))
-    male_hint = bool(re.search(r"\b(him|he|man|boy)\b", text)) and not re.search(
+    male_hint = bool(re.search(r"\b(him|he|man|boy|fellow|bloke)\b", text)) and not re.search(
         r"\b(her|she|woman|girl|lady)\b", text,
     )
     if female_hint:
@@ -82,11 +83,23 @@ def collect_gender_matches(action, present):
 def detect_target_ambiguity(action, player, present, npcs, kind, *, target_id=None):
     """
     Return ambiguity payload when the player must pick among present NPCs.
-    None when targeting is clear enough to proceed (or no candidates).
+    Constraint survivors only — never offer NPCs that violate what the player said.
     """
     if kind not in _CLARIFY_KINDS or not present or len(present) < 2:
         return None
     if target_id:
+        return None
+
+    result = resolve_target(action, player, present, npcs=npcs, kind=kind)
+    if result.status == TargetStatus.AMBIGUOUS and len(result.candidates) >= 2:
+        return {
+            "kind": kind,
+            "reason": result.reason or "target unclear",
+            "options": [_clarification_option(n, kind) for n in result.candidates[:6]],
+            "original_action": (action or "").strip()[:200],
+        }
+
+    if result.status in (TargetStatus.MATCHED, TargetStatus.ABSENT):
         return None
 
     present_ids = {n["id"] for n in present}
@@ -108,10 +121,8 @@ def detect_target_ambiguity(action, player, present, npcs, kind, *, target_id=No
             candidates = desc_hits
             reason = "more than one person matches that description"
 
-    if not candidates and action_mentions_role_or_descriptor(action, present=present):
+    if not candidates and action_mentions_target_constraint(action, present=present):
         desc_hits = collect_description_matches(action, present)
-        if len(desc_hits) == 0 and kind in ("attack", "find"):
-            return None
         if len(desc_hits) > 1:
             candidates = desc_hits
             reason = "more than one person matches that role"
@@ -132,7 +143,7 @@ def detect_target_ambiguity(action, player, present, npcs, kind, *, target_id=No
             re.search(r"\b(knight|knights|guard|guards|soldier|soldiers|monster|beast)\b", text)
             or find_npc_by_name_in_text(action, npcs, player)
             or re.search(r"\b(her|him|she|he)\b", text)
-            or action_mentions_role_or_descriptor(action, present=present)
+            or action_mentions_target_constraint(action, present=present)
             or player.get("scene_focus")
             or (
                 player.get("last_combat_target")
@@ -207,40 +218,114 @@ def resolve_clarification_pick(action, player, present, npcs):
 
     text = (action or "").strip()
     lower = text.lower()
-    present_ids = {n["id"] for n in present}
     options = pending.get("options") or []
 
+    opt_ids = {o["id"] for o in options}
+
+    # Exact chip match first
     for opt in options:
         chip = (opt.get("chip") or "").lower()
         if chip and lower == chip:
             return pending.get("kind"), opt["id"]
-        if chip and chip in lower:
-            return pending.get("kind"), opt["id"]
 
     for opt in options:
-        if opt["id"] not in present_ids:
+        chip = (opt.get("chip") or "").lower()
+        if chip and chip in lower and len(lower) <= len(chip) + 8:
+            return pending.get("kind"), opt["id"]
+
+    # Name / label match — options are authoritative; do not require scene cast membership
+    for opt in options:
+        oid = opt.get("id")
+        if not oid or oid not in opt_ids:
             continue
-        npc = next((n for n in present if n["id"] == opt["id"]), None) or npcs.get(opt["id"], {})
+        npc = npcs.get(oid, {})
+        if npc.get("status") == "dead":
+            continue
+        label = (opt.get("label") or "").strip()
+        if label and re.search(rf"\b{re.escape(label.lower())}\b", lower):
+            return pending.get("kind"), oid
         name = (npc.get("name") or "").strip()
         if name and re.search(rf"\b{re.escape(name.lower())}\b", lower):
-            return pending.get("kind"), opt["id"]
+            return pending.get("kind"), oid
         first = name.split()[0].lower() if name else ""
         if first and len(first) > 2 and re.search(rf"\b{re.escape(first)}\b", lower):
-            return pending.get("kind"), opt["id"]
+            return pending.get("kind"), oid
 
     m = re.match(r"^\s*(\d+)\s*$", text)
     if m:
         idx = int(m.group(1)) - 1
         if 0 <= idx < len(options):
             opt = options[idx]
-            if opt["id"] in present_ids:
-                return pending.get("kind"), opt["id"]
+            oid = opt.get("id")
+            if oid in opt_ids and npcs.get(oid, {}).get("status") != "dead":
+                return pending.get("kind"), oid
 
+    # Constraint answer: "the woman", "the guard", "him" — not generic unrelated text
+    has_target_signal = bool(
+        re.search(
+            r"\b(him|her|he|she|the\s+\w+|man|woman|boy|girl|first|second|last|middle)\b",
+            lower,
+        )
+    )
+    if has_target_signal:
+        from simulation.target_constraints import resolve_target
+        result = resolve_target(
+            text, player, present, npcs=npcs, kind=pending.get("kind", "talk"),
+        )
+        if result.matched and result.npc_id in opt_ids:
+            return pending.get("kind"), result.npc_id
+
+    note_pending_pick_failed(player)
     return None, None
 
 
+def should_abandon_clarification(action, player):
+    """True when pending clarification should clear for a new unrelated action."""
+    pending = player.get("pending_target_clarification")
+    if not pending:
+        return False
+    text = (action or "").strip().lower()
+    if not text:
+        return False
+    if re.match(r"^\d+$", text):
+        return False
+    for opt in pending.get("options") or []:
+        chip = (opt.get("chip") or "").lower()
+        if chip and chip in text:
+            return False
+    # New verb-heavy action unrelated to picking among options
+    if re.search(
+        r"\b(?:explore|travel|rest|wait|investigate|attack|steal|give|buy|leave|help)\b",
+        text,
+    ):
+        return True
+    if len(text.split()) >= 4 and not re.search(r"\b(?:him|her|the\s+\w+)\b", text):
+        return True
+    return False
+
+
 def set_pending_clarification(player, pending):
+    pending = dict(pending or {})
+    existing = player.get("pending_target_clarification") or {}
+    same_question = (
+        existing.get("original_action") == pending.get("original_action")
+        and existing.get("kind") == pending.get("kind")
+    )
+    pending["fail_count"] = existing.get("fail_count", 0) if same_question else 0
     player["pending_target_clarification"] = pending
+
+
+def note_pending_pick_failed(player):
+    pending = player.get("pending_target_clarification")
+    if not pending:
+        return
+    pending["fail_count"] = int(pending.get("fail_count") or 0) + 1
+    player["pending_target_clarification"] = pending
+
+
+def pending_clarification_exhausted(player, *, max_failures=3) -> bool:
+    pending = player.get("pending_target_clarification") or {}
+    return int(pending.get("fail_count") or 0) >= max_failures
 
 
 def clear_pending_clarification(player):

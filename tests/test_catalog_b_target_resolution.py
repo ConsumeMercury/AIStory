@@ -118,3 +118,153 @@ def test_find_role_with_no_match_does_not_use_scene_focus():
     pl = player(scene_focus="soldier")
     found = resolve_find_person("find the priest", pl, [soldier], {})
     assert found is None
+
+
+def test_gender_descriptor_with_no_match_returns_absent():
+    """talk to the woman with only male NPCs must not substitute a man."""
+    males = [
+        npc("m1", role="merchant", name="Xithar", gender="male"),
+        npc("m2", role="guard", name="Grimson", gender="male"),
+    ]
+    pl = player(scene_focus="m1")
+    target = resolve_action_target("Talk to the woman", pl, males, kind="talk")
+    assert target is None
+
+    action_ctx = {"kind": "talk", "action_summary": "Talk to the woman", "story_directive": ""}
+    resolve_target_and_absence(
+        "Talk to the woman", pl, males, npc_map(*males), action_ctx, {}, {},
+    )
+    assert action_ctx.get("target_id") is None
+    assert action_ctx.get("target_constraint_failed")
+
+
+def test_gender_descriptor_with_match_resolves_correctly():
+    woman = npc("w1", role="merchant", name="Mara", gender="female")
+    man = npc("m1", role="guard", name="Holt", gender="male")
+    pl = player(scene_focus="m1")
+    target = resolve_action_target("Talk to the woman", pl, [woman, man], kind="talk")
+    assert target and target["id"] == "w1"
+
+
+def test_gender_constraint_blocks_scene_cast_fallback():
+    from simulation.scene_cast import select_scene_cast
+
+    males = [
+        npc("m1", role="merchant", name="Xithar", gender="male"),
+        npc("m2", role="guard", name="Grimson", gender="male"),
+    ]
+    pl = player(scene_focus="m1")
+    ctx = {"kind": "talk", "action_summary": "Talk to the woman"}
+    focus, _note, focal_id = select_scene_cast(males, pl, ctx)
+    assert focal_id is None
+    assert focus == []
+    assert ctx.get("target_constraint_failed")
+
+
+# --- Expanded constraint-engine catalog ---
+
+
+def test_no_constraint_single_present_auto_targets():
+    lone = npc("solo", role="merchant", name="Tomas", gender="male")
+    pl = player(scene_focus=None)
+    target = resolve_action_target("talk", pl, [lone], kind="talk")
+    assert target and target["id"] == "solo"
+
+
+def test_no_constraint_multi_present_no_focus_clarifies_or_absent():
+    from simulation.target_constraints import TargetStatus, resolve_target
+
+    pair = [
+        npc("a", role="merchant", gender="male"),
+        npc("b", role="guard", gender="male"),
+    ]
+    pl = player(scene_focus=None)
+    result = resolve_target("talk", pl, pair, kind="talk")
+    assert result.status == TargetStatus.AMBIGUOUS
+
+
+def test_role_multi_match_clarifies_among_role():
+    from simulation.target_constraints import TargetStatus, resolve_target
+
+    priests = [
+        npc("p1", role="priest", name="Hale", gender="male"),
+        npc("p2", role="priest", name="Mira", gender="female"),
+    ]
+    pl = player(scene_focus=None)
+    result = resolve_target("talk to the priest", pl, priests, kind="talk")
+    assert result.status == TargetStatus.AMBIGUOUS
+    assert len(result.candidates) == 2
+    assert all(n.get("role") == "priest" for n in result.candidates)
+
+
+def test_gender_multi_match_clarifies_among_gender():
+    from simulation.target_constraints import TargetStatus, resolve_target
+
+    women = [
+        npc("w1", role="merchant", gender="female", name="Mara"),
+        npc("w2", role="scholar", gender="female", name="Lira"),
+    ]
+    pl = player(scene_focus=None)
+    result = resolve_target("talk to the woman", pl, women, kind="talk")
+    assert result.status == TargetStatus.AMBIGUOUS
+    assert len(result.candidates) == 2
+    assert all(n.get("gender") == "female" for n in result.candidates)
+
+
+def test_gender_no_match_does_not_substitute_other_gender():
+    males = [
+        npc("m1", role="merchant", gender="male"),
+        npc("m2", role="guard", gender="male"),
+    ]
+    pl = player(scene_focus="m1")
+    from simulation.target_constraints import TargetStatus, resolve_target
+
+    result = resolve_target("Talk to the woman", pl, males, kind="talk")
+    assert result.status == TargetStatus.ABSENT
+    assert result.constraint_violated == "gender:female"
+    assert resolve_action_target("Talk to the woman", pl, males, kind="talk") is None
+
+
+def test_compound_all_must_hold_partial_is_no_match():
+    from simulation.target_constraints import TargetStatus, resolve_target
+
+    tall_priest = npc("tp", role="priest", gender="male", physique={"build": "tall"})
+    short_priest = npc("sp", role="priest", gender="male", physique={"build": "stocky"})
+    pl = player(scene_focus="sp")
+    result = resolve_target("talk to the tall priest", pl, [short_priest], kind="talk")
+    assert result.status == TargetStatus.ABSENT
+
+    result2 = resolve_target("talk to the tall priest", pl, [tall_priest, short_priest], kind="talk")
+    assert result2.status == TargetStatus.MATCHED
+    assert result2.npc_id == "tp"
+
+
+def test_conflicting_constraints_clarify():
+    from simulation.target_constraints import TargetStatus, resolve_target
+
+    cast = [npc("x", role="merchant", gender="male"), npc("y", role="guard", gender="female")]
+    pl = player(scene_focus=None)
+    result = resolve_target("talk to her, the old man", pl, cast, kind="talk")
+    assert result.status == TargetStatus.AMBIGUOUS
+    assert result.constraint_violated == "conflicting constraints"
+
+
+def test_attack_no_match_hard_fails_never_substitutes():
+    from simulation.target_constraints import TargetStatus, resolve_target
+
+    males = [npc("m1", role="guard", gender="male"), npc("m2", role="soldier", gender="male")]
+    pl = player(scene_focus="m1")
+    result = resolve_target("attack the woman", pl, males, kind="attack")
+    assert result.status == TargetStatus.ABSENT
+    assert result.constraint_violated == "gender:female"
+
+
+def test_other_one_excludes_current_focal():
+    from simulation.target_constraints import TargetStatus, resolve_target
+
+    a = npc("a", role="merchant", gender="male", name="Tomas")
+    b = npc("b", role="guard", gender="male", name="Holt")
+    pl = player(scene_focus="a")
+    result = resolve_target("talk to the other one", pl, [a, b], kind="talk")
+    assert result.status == TargetStatus.MATCHED
+    assert result.npc_id == "b"
