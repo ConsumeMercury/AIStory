@@ -7,6 +7,7 @@ and merges narrative_memories with shared importance scoring.
 
 from simulation.importance_router import score_memory_record
 from simulation.memory_immersion import score_at_retrieval, surface_memory_limit
+from simulation.memory_schema import combined_retrieval_score
 from simulation.memory_retrieval import get_relevant_memories
 
 
@@ -16,7 +17,7 @@ def _beat_log_candidates(player, query_words, *, focal_npc_id=None, current_tick
         text = (rec.get("story_meaning") or rec.get("action") or "").strip()
         if not text:
             continue
-        score = score_at_retrieval(rec, player=player, current_tick=current_tick)
+        score = combined_retrieval_score(rec, player=player, current_tick=current_tick)
         score += sum(1 for w in query_words if w in text.lower()) * 16
         if focal_npc_id and focal_npc_id == rec.get("target_id"):
             score += 24
@@ -185,9 +186,18 @@ def retrieve_memories_for_beat(
         merged.append(mem)
 
     merged.sort(
-        key=lambda m: score_at_retrieval(
-            {"importance": m.get("importance"), "story_meaning": m.get("action"), "text": m.get("action"),
-             "tick": m.get("tick"), "valence": m.get("valence")},
+        key=lambda m: combined_retrieval_score(
+            {
+                "importance": m.get("importance"),
+                "story_meaning": m.get("action"),
+                "text": m.get("action"),
+                "tick": m.get("tick"),
+                "valence": m.get("valence"),
+                "emotional_weight": m.get("emotional_weight"),
+                "narrative_weight": m.get("narrative_weight"),
+                "social_weight": m.get("social_weight"),
+                "causal_weight": m.get("causal_weight"),
+            },
             player=player,
             current_tick=current_tick,
         ),

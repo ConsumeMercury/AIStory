@@ -94,6 +94,24 @@ def random_delay(lo, hi):
     return random.randint(lo, hi)
 
 
+def _institution_id_for_npc(npc, institutions, inst_type):
+    if not npc or not institutions:
+        return None
+    inst_ref = npc.get("institution") or {}
+    if isinstance(inst_ref, dict) and inst_ref.get("id"):
+        iid = inst_ref["id"]
+        if not inst_type or (institutions.get(iid) or {}).get("type") == inst_type:
+            return iid
+    city = npc.get("location") or ""
+    for iid, inst in institutions.items():
+        if inst_type and inst.get("type") != inst_type:
+            continue
+        if city and inst.get("city") and inst.get("city") != city:
+            continue
+        return iid
+    return None
+
+
 def process_pending(player, world, factions=None, institutions=None):
     """Fire consequences whose day has arrived. Returns list of fired summaries."""
     day = world.get("day", 1)
@@ -145,6 +163,32 @@ def process_pending(player, world, factions=None, institutions=None):
                     player, fid, effects["faction_standing_delta"],
                     reason=item.get("summary", ""),
                 )
+
+        inst_delta = effects.get("institution_standing_delta")
+        if inst_delta:
+            from simulation.institution_membership import adjust_institution_standing
+            iid = effects.get("institution_id")
+            if not iid and effects.get("institution_type"):
+                iid = _institution_id_for_npc(npc, institutions, effects["institution_type"])
+            if not iid and effects.get("institution_type"):
+                for iid_key, inst in institutions.items():
+                    if inst.get("type") == effects["institution_type"]:
+                        iid = iid_key
+                        break
+            if iid:
+                adjust_institution_standing(
+                    player, iid, inst_delta, reason=item.get("summary", "")[:120],
+                )
+
+        hook_label = effects.get("emergent_hook_label")
+        if hook_label:
+            player.setdefault("emergent_hooks", []).append({
+                "id": item.get("id"),
+                "kind": effects.get("emergent_hook_kind", "delayed"),
+                "label": hook_label[:160],
+                "tick": day,
+            })
+            player["emergent_hooks"] = (player.get("emergent_hooks") or [])[-24:]
 
         if effects.get("story_flag"):
             player.setdefault("story_flags", {})[effects["story_flag"]] = True

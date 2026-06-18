@@ -268,6 +268,12 @@ def build_turn_boundary(action_ctx, output_boundary):
     trace = (action_ctx or {}).get("memory_trace")
     if trace:
         merged["memory_trace"] = trace
+    director = (action_ctx or {}).get("director_plan")
+    if director:
+        merged["director_plan"] = director
+    consequence = (action_ctx or {}).get("consequence_trace")
+    if consequence:
+        merged["consequence_trace"] = consequence
     return merged
 
 

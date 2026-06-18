@@ -116,7 +116,7 @@ def propagate_causal_pressure(player, kind, action_ctx, *, npcs=None, areas=None
         from simulation.consequence_cascade import register_from_causal_link
         from storage import load as _load
         world_state = _load("world/world_state.json", {})
-        if register_from_causal_link(player, links[0], world=world_state, areas=areas):
+        if register_from_causal_link(player, links[0], world=world_state, areas=areas, action_ctx=action_ctx):
             changed = True
     return changed
 

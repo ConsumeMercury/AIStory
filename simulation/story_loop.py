@@ -1283,6 +1283,9 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
                 register_combat_consequences(
                     player, target_live, world=world, areas=areas_live,
                     fatal=True, tick=tick,
+                    memory_id=outcome.get("memory_id"),
+                    institutions=institutions,
+                    action_ctx=action_ctx,
                 )
             else:
                 ripple_from_district_shock(

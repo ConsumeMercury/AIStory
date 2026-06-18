@@ -1,5 +1,7 @@
 # AIStory — Architecture & Systems Reference
 
+> **For reviewers and onboarding:** see **[ARCHITECTURE.md](ARCHITECTURE.md)** for the full system design — turn pipeline, memory stack, narrator gating, validation chain, background sim, and data flow diagrams. This file (`NOTES.md`) is a shorter operational companion (limits, run commands, NPC AI tables).
+
 Dark-fantasy text RPG: **Python owns state**, **Gemini writes prose**. This document explains how the pieces fit together, what each system actually does today, and known limits.
 
 ---
@@ -54,8 +56,8 @@ These numbers are **current defaults**, not theoretical maximums.
 | **Memory forget threshold** | salience &lt; **6.0** dropped | same file, `FORGET_BELOW` |
 | **Processed event IDs** | last **3000** tracked | `_mem_state.json` |
 | **Rumors** | last **200** | `rumor_engine.py`, `storyline_engine.py` |
-| **Player journal** | last **300** turns | `story_loop.py` |
-| **Event log** | **Unbounded** (no archival yet) | `events/event_log.json` grows with play |
+| **Player journal** | **300 cap** (importance-ranked trim) | `journal_retention.py` → `trim_journal()` |
+| **Event log (hot)** | archived above **2500** | `event_archiver.py`, env `AISTORY_EVENT_HOT_CAP` |
 | **Travel background ticks** | max **24** per trip | `travel_engine.py` |
 | **Gemini output tokens** | **1200–4800** by action kind; retry at **2×** up to 8192 | `novel_craft.py`, `gemini_client.py` |
 
@@ -232,14 +234,16 @@ Player-facing view: `bonds` meta-command.
 
 ## Player turn pipeline (`simulation/story_loop.py`)
 
+See **ARCHITECTURE.md §5** for the full phased pipeline. Summary:
+
 1. Meta-command? → `player_commands.py` (no LLM)
-2. Log action → load state (`all_events()` includes buffered events)
-3. `interpret_action()` → kind, target, speech, directive
+2. Log action → load state; **`prepare_beat()`** before cast (orchestrator)
+3. `interpret_action()` → kind, target, speech; optional classifier
 4. Travel / combat / trade / skill checks / relationships
 5. `select_scene_cast()` → **one focal NPC** (or none for explore)
-6. Record NPC memories, update goals, build immersion block
-7. `generate_scene()` → Gemini
-8. Append journal excerpt (last 300)
+6. **`record_beat_outcome()`** — unified memory write (see ARCHITECTURE.md §9)
+7. `_generate_scene_with_validation()` → Gemini + validators + regen
+8. Journal append + **`trim_journal()`** + boundary trace + **`finalize_beat()`**
 
 ---
 
@@ -287,18 +291,18 @@ There is **no** offline/template narration mode if Gemini is down. State changes
 
 ## Background tick order (`simulation_runner.py`, ~every 30s)
 
-1. `simulate_npcs` — NPC decision layer
-2. `maintain_monsters`
-3. `apply_npc_consequences` — macro economy/stability
-4. `run_faction_tick`
-5. `update_relationships` — ambient drift
-6. `apply_memory_effects` — trait nudges from recent events
-7. `spread_rumors`
-8. `spread_rumor_beliefs` — rumors → NPC memories
-9. `advance_storylines` — institution + district arcs
-10. `advance_clock`
-11. `flush_events`
-12. `process_memories` — event log → episodic memory
+See **ARCHITECTURE.md §12** for full order. Summary:
+
+1. `simulate_npcs` (tiered sampling) — NPC decision layer
+2. `maintain_monsters`, `apply_npc_consequences`, `advance_districts`
+3. `process_leadership_succession`, `run_faction_tick`
+4. `update_relationships`, `apply_memory_effects`
+5. `spread_rumors`, `spread_rumor_beliefs`, `advance_storylines`
+6. `flush_events`, `process_pending` (consequence queue)
+7. Legacy/goal rumors, memory consolidation
+8. `advance_information_packets`
+9. Emotion decay, secret exposure, world pressure, `rival_tick`
+10. `process_memories` — event log → episodic memory
 
 ---
 
@@ -306,13 +310,20 @@ There is **no** offline/template narration mode if Gemini is down. State changes
 
 | Path | Role |
 |------|------|
+| **`ARCHITECTURE.md`** | **Full system design for reviewers (start here)** |
 | `src/main.py` | Bootstrap, character creation, game loop |
-| `simulation/npc_actions.py` | NPC decision layer |
 | `simulation/story_loop.py` | Player turn orchestration |
+| `simulation/story_orchestrator.py` | Beat planning (prepare/finalize) |
+| `simulation/memory_record.py` | Unified memory write per beat |
+| `simulation/memory_immersion.py` | Subjective memory, callbacks, gossip |
+| `simulation/npc_actions.py` | NPC decision layer |
 | `simulation/narrator.py` | Prompt assembly |
+| `simulation/narrator_blocks.py` | Kind-aware prompt gating |
 | `simulation/gemini_client.py` | Gemini API |
 | `simulation/relationship_engine.py` | Bond math |
 | `simulation/npc_memory_engine.py` | Memory storage, decay, pruning |
+| `simulation/importance_router.py` | Universal importance scoring |
+| `simulation/event_archiver.py` | Hot log archival |
 | `simulation/world_patch.py` | Save patching |
 | `storage.py` | Atomic JSON I/O |
 

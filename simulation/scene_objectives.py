@@ -74,4 +74,11 @@ def build_scene_objectives_block(player, kind, action_context=None, *, structure
     callback = plan.get("memory_callback")
     if callback and callback.get("text"):
         lines.append(f"- Memory callback (one detail, woven naturally): {callback['text'][:160]}")
+    pacing = plan.get("pacing_mode")
+    if pacing:
+        lines.append(f"- Pacing: {pacing} — match rhythm; do not force drama on a breathe beat.")
+    from simulation.narrative_director import build_dialogue_intents_block
+    intent_block = build_dialogue_intents_block(plan.get("dialogue_intents") or [])
+    if intent_block:
+        lines.append(intent_block)
     return "\n".join(lines)

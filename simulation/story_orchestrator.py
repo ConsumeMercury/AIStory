@@ -129,6 +129,23 @@ def prepare_beat(player, *, kind, action_ctx, npcs=None, areas=None, tick=None):
     )
     if callback:
         scene_plan["memory_callback"] = callback
+
+    from simulation.narrative_director import plan_director_beat
+
+    director_plan = plan_director_beat(
+        player, kind=kind, action_ctx=ctx, scene_plan=scene_plan,
+        npcs=npcs, tick=tick,
+    )
+    scene_plan.update({
+        "pacing_mode": director_plan.get("pacing_mode"),
+        "dialogue_intents": director_plan.get("dialogue_intents") or [],
+        "must_surface": director_plan.get("must_surface") or scene_plan.get("must_surface") or [],
+    })
+    if director_plan.get("memory_callback"):
+        scene_plan["memory_callback"] = director_plan["memory_callback"]
+    elif not director_plan.get("callback_scheduled"):
+        scene_plan.pop("memory_callback", None)
+
     priority_npc_ids = list(arc.get("key_npc_ids") or [])[:6] if arc else []
     if focal and focal not in priority_npc_ids:
         priority_npc_ids = [focal] + priority_npc_ids
@@ -149,13 +166,21 @@ def prepare_beat(player, *, kind, action_ctx, npcs=None, areas=None, tick=None):
         "sim_priorities": sim_priorities,
         "open_promises": [p.get("label", "")[:60] for p in list_promises(player)[:3]],
         "scene_plan": scene_plan,
+        "director_plan": {
+            "pacing_mode": scene_plan.get("pacing_mode"),
+            "callback_scheduled": bool(scene_plan.get("memory_callback")),
+            "dialogue_intent_count": len(scene_plan.get("dialogue_intents") or []),
+        },
     }
     ctx["beat_plan"] = beat_plan
+    ctx["director_plan"] = beat_plan.get("director_plan") or {}
     ctx["story_orchestrator"] = {
         "arc_id": beat_plan.get("arc_id"),
         "arc_stage": beat_plan.get("arc_stage"),
         "memory_query_len": len(memory_query or ""),
         "must_surface_count": len(scene_plan.get("must_surface") or []),
+        "pacing_mode": scene_plan.get("pacing_mode"),
+        "callback_scheduled": bool(scene_plan.get("memory_callback")),
     }
     if scene_plan.get("obligation") and kind in _STORY_FORWARD_KINDS:
         existing = (ctx.get("story_directive") or "").strip()

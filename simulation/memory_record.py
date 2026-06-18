@@ -4,8 +4,6 @@ Unified beat memory record — single write path for player-turn memory side eff
 Canonical BeatMemoryRecord on player.beat_memory_log; derived stores updated in one call.
 """
 
-import uuid
-
 from storage import load, save
 
 NPC_FILE = "characters/npcs.json"
@@ -34,31 +32,28 @@ def _append_beat_memory_record(
     witness_ids,
     importance,
     story_meaning=None,
+    interaction_event=None,
 ):
-    arc_id = (player.get("scene_stakes") or {}).get("arc_id")
-    if not arc_id:
-        plan = (action_ctx or {}).get("beat_plan") or {}
-        arc_id = plan.get("arc_id")
-    record = {
-        "id": str(uuid.uuid4())[:12],
-        "tick": tick,
-        "kind": kind,
-        "action": (action or "")[:200],
-        "target_id": (action_ctx or {}).get("target_id") or focal_id,
-        "focal_id": focal_id,
-        "witness_ids": list(witness_ids or [])[:12],
-        "importance": int(importance or 40),
-        "story_meaning": (story_meaning or "")[:240] or None,
-        "arc_id": arc_id,
-    }
-    log = player.setdefault("beat_memory_log", [])
-    log.append(record)
+    from simulation.memory_schema import build_memory_record
     from simulation.importance_router import score_memory_record
 
+    record = build_memory_record(
+        kind=kind,
+        action=action,
+        action_ctx=action_ctx,
+        tick=tick,
+        focal_id=focal_id,
+        witness_ids=witness_ids,
+        importance=importance,
+        story_meaning=story_meaning,
+        interaction_event=interaction_event,
+    )
+    log = player.setdefault("beat_memory_log", [])
+    log.append(record)
     player["beat_memory_log"] = sorted(
         log,
         key=lambda r: score_memory_record(
-            {"importance": r.get("importance"), "story_meaning": r.get("story_meaning") or r.get("action")},
+            {"importance": r.get("importance"), "story_meaning": r.get("story_meaning") or r.get("fact") or r.get("action")},
             player=player,
         ),
         reverse=True,
@@ -139,7 +134,7 @@ def record_beat_outcome(
     story_meaning = infer_story_meaning(
         "player_action", action, kind=kind, target=target_id,
     )
-    _append_beat_memory_record(
+    beat_record = _append_beat_memory_record(
         player,
         kind=kind,
         action=action,
@@ -149,6 +144,7 @@ def record_beat_outcome(
         witness_ids=witness_ids,
         importance=importance,
         story_meaning=story_meaning,
+        interaction_event=interaction_event,
     )
 
     npcs_live = load(NPC_FILE, {})
@@ -200,4 +196,5 @@ def record_beat_outcome(
         "target_changed": target_changed,
         "institutions": institutions,
         "npcs_live": npcs_live,
+        "memory_id": beat_record.get("id") if beat_record else None,
     }
