@@ -275,9 +275,27 @@ def compress_npc_memories(mems, focus, max_items=1):
     """Return memory text sized to the scene focus — not always three bullets."""
     if not mems:
         return ""
+    m0 = mems[0]
+    summary = m0.get("summary") or ""
+    val = float(m0.get("valence") or 0)
+    tone = ""
+    if val <= -0.4:
+        tone = " (still wary of the player)"
+    elif val >= 0.35:
+        tone = " (somewhat disposed toward the player)"
     if focus == "memory":
-        return "; ".join(m["summary"] for m in mems[:2])
-    return mems[0]["summary"]
+        parts = []
+        for m in mems[:2]:
+            s = m.get("summary") or ""
+            v = float(m.get("valence") or 0)
+            if v <= -0.4:
+                parts.append(f"{s} — guarded")
+            elif v >= 0.35:
+                parts.append(f"{s} — warmer")
+            else:
+                parts.append(s)
+        return "; ".join(parts)
+    return summary + tone
 
 
 def speech_hint(persona, focus):

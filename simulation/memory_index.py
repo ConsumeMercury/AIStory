@@ -6,16 +6,17 @@ and merges narrative_memories with shared importance scoring.
 """
 
 from simulation.importance_router import score_memory_record
+from simulation.memory_immersion import score_at_retrieval, surface_memory_limit
 from simulation.memory_retrieval import get_relevant_memories
 
 
-def _beat_log_candidates(player, query_words, *, focal_npc_id=None):
+def _beat_log_candidates(player, query_words, *, focal_npc_id=None, current_tick=None):
     candidates = []
     for i, rec in enumerate((player or {}).get("beat_memory_log") or []):
         text = (rec.get("story_meaning") or rec.get("action") or "").strip()
         if not text:
             continue
-        score = score_memory_record(rec, player=player)
+        score = score_at_retrieval(rec, player=player, current_tick=current_tick)
         score += sum(1 for w in query_words if w in text.lower()) * 16
         if focal_npc_id and focal_npc_id == rec.get("target_id"):
             score += 24
@@ -32,6 +33,37 @@ def _beat_log_candidates(player, query_words, *, focal_npc_id=None):
             },
         })
     return candidates
+
+
+def _npc_memory_candidates(focal_npc_id, query_words, *, current_tick=None, limit=2):
+    """Subjective NPC memories ranked for this beat."""
+    if not focal_npc_id:
+        return []
+    from simulation.memory_immersion import effective_salience
+    from simulation.npc_memory_engine import player_memories
+
+    candidates = []
+    for i, mem in enumerate(player_memories(focal_npc_id, n=8)):
+        summary = (mem.get("summary") or "").strip()
+        if not summary:
+            continue
+        score = effective_salience(mem, current_tick or 0)
+        score += sum(12 for w in query_words if w in summary.lower())
+        candidates.append({
+            "id": f"npcmem:{focal_npc_id}:{i}",
+            "text": summary,
+            "score": score,
+            "memory": {
+                "type": "npc_subjective",
+                "action": summary[:200],
+                "actor": focal_npc_id,
+                "importance": int(score),
+                "valence": mem.get("valence"),
+                "tick": mem.get("tick"),
+            },
+        })
+    candidates.sort(key=lambda c: c.get("score", 0), reverse=True)
+    return candidates[:limit]
 
 
 def _narrative_memory_candidates(player, query_words, *, focal_npc_id=None):
@@ -56,6 +88,11 @@ def _narrative_memory_candidates(player, query_words, *, focal_npc_id=None):
             },
         })
     return candidates
+
+
+def memory_limit_for_kind(kind):
+    """Default retrieval cap — higher for investigative beats."""
+    return surface_memory_limit(kind) + 6 if kind in ("investigate", "accuse", "find") else surface_memory_limit(kind) + 4
 
 
 def retrieve_memories_for_beat(
@@ -85,6 +122,11 @@ def retrieve_memories_for_beat(
     if area:
         query_words.update(w for w in area.lower().replace("_", " ").split() if len(w) > 3)
 
+    current_tick = (player or {}).get("last_tick")
+    if current_tick is None:
+        current_tick = (ctx or {}).get("tick") or 0
+    surface_cap = surface_memory_limit(kind)
+
     event_hits = get_relevant_memories(
         events,
         query,
@@ -97,10 +139,15 @@ def retrieve_memories_for_beat(
     )
 
     if not player:
-        return event_hits[:limit]
+        return event_hits[:surface_cap]
 
     narrative = _narrative_memory_candidates(player, query_words, focal_npc_id=focal_npc_id)
-    beat_log = _beat_log_candidates(player, query_words, focal_npc_id=focal_npc_id)
+    beat_log = _beat_log_candidates(
+        player, query_words, focal_npc_id=focal_npc_id, current_tick=current_tick,
+    )
+    npc_subj = _npc_memory_candidates(
+        focal_npc_id, query_words, current_tick=current_tick, limit=2,
+    )
     narrative.sort(key=lambda c: c.get("score", 0), reverse=True)
     beat_log.sort(key=lambda c: c.get("score", 0), reverse=True)
 
@@ -113,7 +160,7 @@ def retrieve_memories_for_beat(
         seen_text.add(key)
         merged.append(mem)
 
-    for cand in narrative[: max(3, limit // 4)]:
+    for cand in narrative[: max(2, surface_cap // 2)]:
         mem = cand["memory"]
         key = (mem.get("action") or "")[:80].lower()
         if key and key in seen_text:
@@ -121,7 +168,15 @@ def retrieve_memories_for_beat(
         seen_text.add(key)
         merged.append(mem)
 
-    for cand in beat_log[: max(4, limit // 3)]:
+    for cand in npc_subj:
+        mem = cand["memory"]
+        key = (mem.get("action") or "")[:80].lower()
+        if key and key in seen_text:
+            continue
+        seen_text.add(key)
+        merged.append(mem)
+
+    for cand in beat_log[: max(2, surface_cap // 2)]:
         mem = cand["memory"]
         key = (mem.get("action") or "")[:80].lower()
         if key and key in seen_text:
@@ -130,10 +185,12 @@ def retrieve_memories_for_beat(
         merged.append(mem)
 
     merged.sort(
-        key=lambda m: score_memory_record(
-            {"importance": m.get("importance"), "story_meaning": m.get("action"), "text": m.get("action")},
+        key=lambda m: score_at_retrieval(
+            {"importance": m.get("importance"), "story_meaning": m.get("action"), "text": m.get("action"),
+             "tick": m.get("tick"), "valence": m.get("valence")},
             player=player,
+            current_tick=current_tick,
         ),
         reverse=True,
     )
-    return merged[:limit]
+    return merged[:surface_cap]

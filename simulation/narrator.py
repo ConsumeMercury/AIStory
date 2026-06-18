@@ -300,6 +300,9 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
         focal_npc_id=focal_npc_id,
         present_ids=present_ids,
         kind=kind,
+        action_ctx=action_context,
+        current_tick=tick,
+        world=world,
     )
     inv_facts = build_inventory_facts(player, action_context or {})
     facts_parts = [p for p in (inv_facts,) if p]
@@ -428,10 +431,13 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
     has_focal = bool(focal_npc_id)
     profile = narrator_block_profile()
     craft_core = craft_core_for_beat(has_journal=has_journal, kind=kind)
+    beat_plan = (action_context or {}).get("beat_plan") or {}
+    structure_hint = (beat_plan.get("scene_plan") or {}).get("structure_hint")
     if action_context is not None:
         action_context["structure_mode"] = structure_mode
         action_context["narrator_blocks_included"] = list_included_blocks(
             kind, has_focal=has_focal, has_journal=has_journal, profile=profile,
+            structure_hint=structure_hint,
         )
 
     hard_block = hard_constraints or build_hard_constraints_block(
@@ -495,6 +501,7 @@ def assemble_scene_prompt(player_action, world, player, present_npcs,
         has_focal=has_focal,
         has_journal=has_journal,
         profile=profile,
+        structure_hint=structure_hint,
     )
     profile_rows, profile_total = profile_prompt_sections(sections, label="assemble_scene_prompt")
     if action_context is not None:

@@ -95,7 +95,10 @@ def record_player_action(present_npc_ids, memory_tag, action_text, location, tic
 
     for nid in present_npc_ids:
         if nid == target_id:
-            text = tpl
+            if action_snip and memory_tag not in ("general", "rest", "withdrawal", "observation"):
+                text = f"I remember when the outsider {action_snip[:58]}"
+            else:
+                text = tpl
             s = min(100, sal * intensity)
             v = val
         else:
@@ -105,8 +108,12 @@ def record_player_action(present_npc_ids, memory_tag, action_text, location, tic
 
         _add(store, nid, text, v, s, tick, day, ["player"], location, source="player")
         if target_id and nid == target_id and action_snip:
-            _add(store, nid, f"when they {action_snip[:50]}", val, s * 0.6, tick, day,
-                 ["player"], location, source="player")
+            _add(
+                store, nid,
+                f"what they said: \"{action_snip[:48]}\"",
+                val, s * 0.65, tick, day,
+                ["player"], location, source="player",
+            )
 
     _decay_and_trim(store)
     save(MEM_FILE, store)

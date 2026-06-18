@@ -13,6 +13,7 @@ VALID_ACTION_KINDS = frozenset({
 FAST_PATH_KINDS = frozenset({
     "attack", "wait", "travel", "explore", "investigate", "withdraw", "confess",
     "rest", "hunt", "guild", "search", "steal", "blackmail", "accuse", "find",
+    "approach",
 })
 
 HIGH_STAKES_KINDS = frozenset({"attack", "trade", "give", "steal"})

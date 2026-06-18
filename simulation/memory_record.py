@@ -98,9 +98,18 @@ def record_beat_outcome(
     from simulation.npc_emotions import emotions_from_beat
     from simulation.personality_drift import drift_from_beat
     from simulation.institution_memory import record_from_player_action
+    from simulation.memory_immersion import (
+        absorb_npc_memories_into_reputation,
+        maybe_append_gossip_rumor,
+        propagate_social_memory_gossip,
+        reinforce_target_relationship,
+        update_witness_beliefs,
+    )
+    from simulation.npc_memory_engine import player_memories
 
     ctx = action_ctx or {}
     target_id = ctx.get("target_id") or focal_id
+    player["last_tick"] = tick
     mem_tag = ctx.get("memory_tag", "general")
     witness_ids = _witness_ids(focus_npcs, present, kind=kind, target_id=target_id)
 
@@ -155,8 +164,27 @@ def record_beat_outcome(
         record_beat_memory(target_live, kind, action, tick=tick)
         if interaction_event:
             update_beliefs_from_event(target_live, interaction_event, tick=tick)
+        reinforce_target_relationship(
+            target_id, mem_tag, check=ctx.get("skill_check"),
+        )
         target_changed = True
         save(NPC_FILE, npcs_live)
+
+    if interaction_event and witness_ids:
+        update_witness_beliefs(
+            witness_ids, interaction_event, tick=tick, target_id=target_id,
+        )
+
+    if log_player_action and target_id:
+        top_mem = player_memories(target_id, n=1)
+        if top_mem:
+            maybe_append_gossip_rumor(player, top_mem[0], tick=tick)
+            propagate_social_memory_gossip(
+                world, player, target_id, top_mem[0],
+                tick=tick, day=world.get("day"), npcs=npcs_live,
+            )
+
+    absorb_npc_memories_into_reputation(player)
 
     if target_live:
         record_from_player_action(

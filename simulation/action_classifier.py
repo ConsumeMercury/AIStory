@@ -42,8 +42,11 @@ def needs_llm_classifier(action, regex_ctx, scene):
     if not action or not scene:
         return False
     kind = regex_ctx.get("kind", "general")
-    if kind in FAST_PATH_KINDS and regex_ctx.get("target_id"):
-        if kind not in SPEECH_KINDS or regex_ctx.get("player_speech"):
+    if kind in FAST_PATH_KINDS:
+        if regex_ctx.get("target_id"):
+            if kind not in SPEECH_KINDS or regex_ctx.get("player_speech"):
+                return False
+        elif kind in ("approach", "travel") and scene and scene.subplace_id:
             return False
     if kind == "general":
         return True

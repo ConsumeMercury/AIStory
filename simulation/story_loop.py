@@ -16,7 +16,7 @@ from simulation.relationship_engine import (
 )
 from simulation.combat_engine import resolve_combat
 from simulation.storyline_engine import arc_for_city, arc_for_area
-from simulation.memory_index import retrieve_memories_for_beat
+from simulation.memory_index import memory_limit_for_kind, retrieve_memories_for_beat
 from simulation.action_interpreter import interpret_action
 from simulation.scene_coherence import (
     sync_scene_focus,
@@ -72,7 +72,6 @@ from simulation.player_legacy import legacy_from_action, legacy_narrator_block
 from simulation.story_manager import sync_all_pipelines
 from simulation.story_orchestrator import prepare_beat, finalize_beat
 from simulation.memory_record import record_beat_outcome
-from simulation.memory_embeddings import ingest_event_vector
 from simulation.player_reputation import build_reputation_profile
 from simulation.narrative_promises import (
     detect_promises_in_scene,
@@ -260,7 +259,8 @@ def _generate_scene_with_validation(
         player=player,
         present_npcs=focus_npcs,
         memories=retrieve_memories_for_beat(
-            events, action, limit=15,
+            events, action,
+            limit=memory_limit_for_kind(action_ctx.get("kind")),
             player=player, area=player.get("area"),
             focal_npc_id=focal_id,
             npcs=npcs,
@@ -600,8 +600,7 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
         areas = load(AREAS_FILE, {})
         sync_all_pipelines(player, areas)
         nudge_stale_district_tension(player, areas)
-        action_evt = log_event("player_action", "player", action, tick=tick, player=player)
-        ingest_event_vector(player, action_evt)
+        log_event("player_action", "player", action, tick=tick, player=player)
         save(PLAYER_FILE, player)
         if areas:
             save(AREAS_FILE, areas)
@@ -1297,10 +1296,25 @@ def _process_player_action_core(action, *, on_prose_chunk=None):
     relationships = load("characters/relationships.json", {})
     rels_toward_player = {nid: relationships.get(nid, {}).get("player", {}) for nid in focus_id_list}
 
-    immersion_block = _immersion_block(
-        kind, player, world, action_ctx, rumors, events, action,
-        present_ids=[n["id"] for n in present],
-    )
+    from simulation.narrator_blocks import narrator_block_profile, should_include_block
+
+    plan = action_ctx.get("beat_plan") or {}
+    structure_hint = (plan.get("scene_plan") or {}).get("structure_hint")
+    has_focal_for_blocks = bool(focal_id or action_ctx.get("target_id"))
+    block_profile = narrator_block_profile()
+    if should_include_block(
+        "immersion", kind,
+        has_focal=has_focal_for_blocks,
+        has_journal=bool(player.get("journal")),
+        profile=block_profile,
+        structure_hint=structure_hint,
+    ):
+        immersion_block = _immersion_block(
+            kind, player, world, action_ctx, rumors, events, action,
+            present_ids=[n["id"] for n in present],
+        )
+    else:
+        immersion_block = ""
     rival_note = rival_directive(player, npcs)
     if rival_note:
         immersion_block = (immersion_block + "\n\n" + rival_note).strip() if immersion_block else rival_note

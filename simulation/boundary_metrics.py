@@ -265,6 +265,9 @@ def build_turn_boundary(action_ctx, output_boundary):
     }
     if output_boundary:
         merged.update(output_boundary)
+    trace = (action_ctx or {}).get("memory_trace")
+    if trace:
+        merged["memory_trace"] = trace
     return merged
 
 

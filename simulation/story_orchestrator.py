@@ -120,8 +120,16 @@ def prepare_beat(player, *, kind, action_ctx, npcs=None, areas=None, tick=None):
     scene_plan = build_scene_plan(
         player, kind=kind, action_ctx=ctx, arc=arc, npcs=npcs, areas=areas,
     )
-    priority_npc_ids = list(arc.get("key_npc_ids") or [])[:6] if arc else []
+    from simulation.memory_immersion import pick_memory_callback
+
     focal = ctx.get("target_id") or ctx.get("focal_npc_id")
+    callback = pick_memory_callback(
+        player, focal, kind=kind, action_ctx=ctx,
+        current_tick=tick or player.get("last_tick") or 0, npcs=npcs,
+    )
+    if callback:
+        scene_plan["memory_callback"] = callback
+    priority_npc_ids = list(arc.get("key_npc_ids") or [])[:6] if arc else []
     if focal and focal not in priority_npc_ids:
         priority_npc_ids = [focal] + priority_npc_ids
 

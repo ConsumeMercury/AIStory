@@ -143,6 +143,12 @@ _STANDARD_OMIT = {
         "story_graph", "entropy", "causality", "promises", "scene_objectives",
         "culture", "economy", "world_pressure", "immersion", "scene_event",
     }),
+    "approach": frozenset({
+        "story_graph", "entropy", "causality", "promises", "scene_objectives",
+        "culture", "economy", "world_pressure", "immersion", "scene_event",
+        "local_arc", "focal_beliefs", "focal_emotion", "social_circle",
+        "institution_memory", "secret_pressure", "reputation",
+    }),
 }
 
 _SOCIAL_KINDS = frozenset({
@@ -177,7 +183,7 @@ def craft_core_for_beat(*, has_journal, kind):
     return CRAFT_CORE
 
 
-def should_include_block(name, kind, *, has_focal, has_journal, profile=None):
+def should_include_block(name, kind, *, has_focal, has_journal, profile=None, structure_hint=None):
     profile = profile or narrator_block_profile()
     kind = kind or "general"
 
@@ -207,6 +213,9 @@ def should_include_block(name, kind, *, has_focal, has_journal, profile=None):
         return True
 
     # standard
+    if structure_hint == "continuation" and not has_focal:
+        if name in {"story_manager", "causality", "promises"}:
+            return False
     omit = _STANDARD_OMIT.get(kind, frozenset())
     if name in omit:
         return False
@@ -227,7 +236,7 @@ def should_include_block(name, kind, *, has_focal, has_journal, profile=None):
     return True
 
 
-def list_included_blocks(kind, *, has_focal, has_journal, profile=None):
+def list_included_blocks(kind, *, has_focal, has_journal, profile=None, structure_hint=None):
     """Block keys that would ship for this beat (for boundary trace)."""
     profile = profile or narrator_block_profile()
     included = []
@@ -238,19 +247,23 @@ def list_included_blocks(kind, *, has_focal, has_journal, profile=None):
             continue
         if should_include_block(
             key, kind, has_focal=has_focal, has_journal=has_journal, profile=profile,
+            structure_hint=structure_hint,
         ):
             included.append(key)
     return included
 
 
-def join_sections(sections, *, kind, has_focal, has_journal, profile=None):
+def join_sections(sections, *, kind, has_focal, has_journal, profile=None, structure_hint=None):
     """Filter and join prompt sections in canonical order."""
     profile = profile or narrator_block_profile()
     parts = []
     for key in SECTION_ORDER:
         if key == "arbitration":
             text = sections.get("arbitration", "")
-        elif not should_include_block(key, kind, has_focal=has_focal, has_journal=has_journal, profile=profile):
+        elif not should_include_block(
+            key, kind, has_focal=has_focal, has_journal=has_journal, profile=profile,
+            structure_hint=structure_hint,
+        ):
             continue
         else:
             text = sections.get(key, "")

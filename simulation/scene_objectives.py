@@ -71,4 +71,7 @@ def build_scene_objectives_block(player, kind, action_context=None, *, structure
         lines.append("- Must surface (complicate or pay off):")
         for item in must_surface[:3]:
             lines.append(f"  • {item[:90]}")
+    callback = plan.get("memory_callback")
+    if callback and callback.get("text"):
+        lines.append(f"- Memory callback (one detail, woven naturally): {callback['text'][:160]}")
     return "\n".join(lines)
